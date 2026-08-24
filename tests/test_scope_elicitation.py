@@ -65,13 +65,21 @@ class StubEspn:
         return None
 
     async def get_cup_season(self, competition, season):
-        if competition == "CDR" and season == "2025-26":
+        if season != "2025-26":
+            raise DataSourceError("cup season unavailable")
+        if competition == "CDR":
             return [
                 Match(competition="CDR", season=season, date=dt.date(2026, 1, 12),
                       home_team="Real Madrid", away_team="Barcelona",
                       home_goals=2, away_goals=4, result="A"),
             ]
-        raise DataSourceError("cup season unavailable")
+        if competition == "UCL":
+            return [
+                Match(competition="UCL", season=season, date=dt.date(2026, 4, 28),
+                      home_team="Barcelona", away_team="Real Madrid",
+                      home_goals=3, away_goals=0, result="H"),
+            ]
+        return []  # UEL and everything else: valid empty season
 
 
 def _asked_scopes() -> list:
@@ -85,7 +93,13 @@ async def _run_h2h(client_args: dict, args: dict):
         async with Client(server_module.mcp, **client_args) as client:
             result = await client.call_tool("get_head_to_head", args)
             texts = [b.text for b in result.content if hasattr(b, "text")]
-            return result, (json.loads(texts[0]) if texts else None)
+            data = None
+            if texts and not result.is_error:
+                try:
+                    data = json.loads(texts[0])
+                except json.JSONDecodeError:
+                    data = None
+            return result, data
     finally:
         server_module._provider = None
 
@@ -143,9 +157,46 @@ class TestScopeElicitation:
              "competition": "SP1", "season": "2025-26", "scope": "all"},
         )
         assert not result.is_error
-        assert data["summary"]["matches"] == 2  # league 1 + cup 1
+        assert data["summary"]["matches"] == 3  # league 1 + CDR 1 + UCL 1
         assert data["by_scope"]["league"]["matches"] == 1
         assert data["by_scope"]["domestic_cups"]["matches"] == 1
+        assert data["by_scope"]["europe"]["matches"] == 1
         # per-season entries carry competition labels
         comps = {entry["competition"] for entry in data["per_season"]}
-        assert comps == {"SP1", "CDR"}
+        assert comps == {"SP1", "CDR", "UCL"}
+
+    async def test_concrete_cup_scope_selects_only_that_cup(self):
+        result, data = await _run_h2h(
+            {"raise_exceptions": False},
+            {"team_a": "Barcelona", "team_b": "Real Madrid",
+             "competition": "SP1", "season": "2025-26", "scope": "UCL"},
+        )
+        assert not result.is_error
+        assert data["scope"] == "UCL"
+        assert data["summary"]["matches"] == 1  # only the UCL meeting
+        assert data["summary"]["wins_a"] == 1   # Barcelona 3-0
+        assert "CDR" not in data["by_competition"]
+        assert "SP1" not in data["by_competition"]
+
+    async def test_by_competition_distinguishes_ucl_and_uel(self):
+        result, data = await _run_h2h(
+            {"raise_exceptions": False},
+            {"team_a": "Barcelona", "team_b": "Real Madrid",
+             "competition": "SP1", "season": "2025-26", "scope": "europe"},
+        )
+        assert not result.is_error
+        # europe bucket rolls up, by_competition keeps them apart
+        assert data["by_scope"]["europe"]["matches"] == 1
+        assert data["by_competition"]["UCL"]["matches"] == 1
+        assert data["by_competition"]["UCL"]["name"] == "UEFA Champions League"
+        assert "UEL" not in data["by_competition"]  # no meetings -> no entry
+
+    async def test_invalid_scope_is_a_tool_error(self):
+        result, data = await _run_h2h(
+            {"raise_exceptions": False},
+            {"team_a": "Barcelona", "team_b": "Real Madrid",
+             "competition": "SP1", "season": "2025-26", "scope": "banana"},
+        )
+        assert result.is_error
+        texts = [b.text for b in result.content if hasattr(b, "text")]
+        assert "invalid scope" in texts[0]

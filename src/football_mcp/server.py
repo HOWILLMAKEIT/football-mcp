@@ -297,13 +297,33 @@ def _shift_season(season: str, back: int) -> str:
     return f"{start}-{str(start + 1)[2:]}"
 
 
+SCOPE_VALUES = ("league", "domestic_cups", "europe", "all")
+# A scope is either one of the four semantic groups or one concrete cup code.
+VALID_SCOPES = frozenset((*SCOPE_VALUES, *CUP_SLUGS))
+
+
 class ScopeConfirm(BaseModel):
     """Elicitation form: which competition scope an analysis should cover."""
 
-    scope: Literal["league", "domestic_cups", "europe", "all"] = Field(
+    scope: Literal[
+        "league",
+        "domestic_cups",
+        "europe",
+        "all",
+        "FA",
+        "LC",
+        "CDR",
+        "CI",
+        "DFB",
+        "CDF",
+        "UCL",
+        "UEL",
+    ] = Field(
         description=(
-            "league: league meetings only; domestic_cups: national cups of the "
-            "league's country; europe: UCL/UEL; all: everything"
+            "league: league only; domestic_cups: national cups of the league's "
+            "country; europe: UCL+UEL; all: everything; or one concrete cup "
+            "(UCL Champions League, UEL Europa League, CDR Copa del Rey, "
+            "FA Cup, ...)"
         )
     )
 
@@ -317,7 +337,13 @@ async def _resolve_h2h_scope(
     `scope`, answer directly with zero round-trips.
     """
     if scope is not None:
-        return ScopeConfirm(scope=scope)  # type: ignore[arg-type]
+        normalized = scope.lower() if scope.lower() in SCOPE_VALUES else scope.upper()
+        if normalized not in VALID_SCOPES:
+            raise ValueError(
+                f"invalid scope {scope!r}; expected one of "
+                f"{', '.join(sorted(VALID_SCOPES))}"
+            )
+        return ScopeConfirm(scope=normalized)  # type: ignore[arg-type]
     return Elicit(
         f"Which meetings should the {team_a} vs {team_b} head-to-head "
         f"({competition}) include?",
@@ -347,15 +373,19 @@ async def _gather_scope_groups(
     provider = get_provider()
     enhancement = provider.enhancement
     espn = enhancement if hasattr(enhancement, "get_cup_season") else None
+    scope = scope.lower() if scope in SCOPE_VALUES else scope.upper()
     want_league = scope in ("league", "all")
     want_domestic = scope in ("domestic_cups", "all")
     want_europe = scope in ("europe", "all")
 
     cup_codes: list[str] = []
-    if want_domestic:
-        cup_codes.extend(LEAGUE_TO_DOMESTIC_CUPS.get(competition.upper(), ()))
-    if want_europe:
-        cup_codes.extend(EUROPEAN_CUPS)
+    if scope in CUP_SLUGS:
+        cup_codes.append(scope)  # one concrete cup, e.g. "UCL" or "CDR"
+    else:
+        if want_domestic:
+            cup_codes.extend(LEAGUE_TO_DOMESTIC_CUPS.get(competition.upper(), ()))
+        if want_europe:
+            cup_codes.extend(EUROPEAN_CUPS)
 
     groups: list[dict[str, Any]] = []
     skipped: list[str] = []
@@ -426,13 +456,17 @@ async def get_head_to_head(
             newest first across the whole span.
         seasons_back: seasons to reach back beyond `season` (0 = single
             season). E.g. seasons_back=9 analyzes the last 10 seasons.
-        scope: "league" | "domestic_cups" | "europe" | "all". If omitted,
+        scope: "league" | "domestic_cups" | "europe" | "all", or one
+            concrete cup code ("UCL", "UEL", "CDR", "FA", "LC", "CI",
+            "DFB", "CDF") to analyze exactly that competition. If omitted,
             the user is asked which scope to analyze (elicitation); a
             declined question falls back to "league".
 
     Notes: cup ties decided on penalties count by their regulation score
     (the `note` field on each match carries the shootout outcome). Two-legged
-    ties count each leg as one meeting. Cups have no odds.
+    ties count each leg as one meeting. Cups have no odds. The response
+    breaks totals down both `by_scope` (league/domestic_cups/europe) and
+    `by_competition` (e.g. UCL vs UEL separately).
     """
     competition = competition.upper()
     if competition not in SUPPORTED_COMPETITIONS:
@@ -448,6 +482,15 @@ async def get_head_to_head(
         # declined / cancelled elicitation: safe default, stated openly
         chosen_scope = "league"
         scope_note = "scope not specified and question declined; defaulted to league"
+    raw_scope = str(chosen_scope)
+    chosen_scope = next(
+        (c for c in (raw_scope.lower(), raw_scope.upper()) if c in VALID_SCOPES), None
+    )
+    if chosen_scope is None:
+        raise ValueError(
+            f"invalid scope {raw_scope!r}; expected one of "
+            f"{', '.join(sorted(VALID_SCOPES))}"
+        )
 
     groups, skipped = await _gather_scope_groups(
         competition, season, seasons_back, chosen_scope or "league"
@@ -455,6 +498,7 @@ async def get_head_to_head(
 
     per_group: list[dict[str, Any]] = []
     by_scope: dict[str, dict[str, int]] = {}
+    by_competition: dict[str, dict[str, Any]] = {}
     totals = {"matches": 0, "wins_a": 0, "wins_b": 0, "draws": 0, "goals_a": 0, "goals_b": 0}
     all_rows: list[dict] = []
     found_any = False
@@ -480,9 +524,15 @@ async def get_head_to_head(
             bucket, {"matches": 0, "wins_a": 0, "wins_b": 0, "draws": 0,
                      "goals_a": 0, "goals_b": 0}
         )
+        comp_entry = by_competition.setdefault(
+            group["code"], {"name": group["name"], "scope": bucket,
+                            "matches": 0, "wins_a": 0, "wins_b": 0, "draws": 0,
+                            "goals_a": 0, "goals_b": 0}
+        )
         for key in totals:
             totals[key] += h2h.summary.get(key, 0)
             bucket_totals[key] += h2h.summary.get(key, 0)
+            comp_entry[key] += h2h.summary.get(key, 0)
         all_rows.extend(
             dict(row, season=group["season"], competition=group["code"])
             for row in h2h.matches
@@ -503,6 +553,7 @@ async def get_head_to_head(
         "span": f"{_shift_season(season, seasons_back)}..{season}",
         "per_season": per_group,
         "by_scope": by_scope,
+        "by_competition": by_competition,
         "matches": all_rows[:last],
         "summary": totals,
         "skipped_seasons": skipped,
