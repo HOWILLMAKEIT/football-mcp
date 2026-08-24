@@ -1,9 +1,8 @@
 """Season provider: freshness ladder over CSV + an enhancement source.
 
-The enhancement source is pluggable (Protocol): EspnSource is the default
-(keyless, minute-fresh); ApiFootballSource can serve as a keyed fallback.
-Both expose: name, has_key, get_fixtures(competition, season, from, to)
-and quota_remaining().
+The enhancement source is pluggable (Protocol); EspnSource is the default
+(keyless, minute-fresh). It exposes: name, has_key, get_fixtures(...) and
+quota_remaining().
 
 Staleness is fixture-aware, not calendar-aware:
 
@@ -178,9 +177,8 @@ class SeasonProvider:
                 reason = f"csv unavailable ({csv_error})" if csv_error else "csv empty"
                 if self.enhancement is None or not self.enhancement.has_key:
                     freshness.warning = (
-                        f"no data available: {reason}; configure an enhancement "
-                        "source (espn is keyless; api-football via "
-                        "FOOTBALL_MCP_API_FOOTBALL_KEY)"
+                        f"no data available: {reason}; configure an "
+                        "enhancement source (espn is keyless)"
                     )
                 else:
                     freshness.warning = (
