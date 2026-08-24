@@ -15,3 +15,7 @@ dist/
 
 # Downloaded football-data cache (if redirected here; default is ~/.cache/football_mcp)
 .cache/
+
+# local dev downloads
+cache-dev/
+.cache-dev/

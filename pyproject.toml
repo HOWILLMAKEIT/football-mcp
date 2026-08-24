@@ -34,3 +34,8 @@ asyncio_mode = "auto"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "ASYNC"]
+# DTZ rules are noisy for this domain: CSV match dates are naive local dates.
+ignore = ["DTZ011", "DTZ007"]
