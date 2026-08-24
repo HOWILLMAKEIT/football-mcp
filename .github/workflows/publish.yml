@@ -1,0 +1,45 @@
+# Publish to PyPI on every tagged release (v*).
+#
+# Uses PyPI trusted publishing (OIDC): no API token in secrets.
+# One-time setup on pypi.org (per project):
+#   Publishing → Add a new pending publisher
+#     PyPI project name: football-mcp
+#     Owner: HOWILLMAKEIT
+#     Repository: HOWILLMAKEIT/football-mcp
+#     Workflow name: publish.yml
+#     Environment: pypi
+# And create the "pypi" GitHub environment (Settings → Environments).
+
+name: publish
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Build sdist and wheel
+        run: uv build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      # Required for OIDC trusted publishing.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
