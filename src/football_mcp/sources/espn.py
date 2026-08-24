@@ -65,6 +65,29 @@ CUP_SLUGS: dict[str, tuple[str, str]] = {
     "UEL": ("uefa.europa", "UEFA Europa League"),
 }
 
+# League code -> the domestic cups its country plays in (subset of CUP_SLUGS).
+LEAGUE_TO_DOMESTIC_CUPS: dict[str, tuple[str, ...]] = {
+    "E0": ("FA", "LC"),
+    "E1": ("FA", "LC"),
+    "E2": ("FA", "LC"),
+    "E3": ("FA", "LC"),
+    "SC0": (),
+    "D1": ("DFB",),
+    "D2": ("DFB",),
+    "I1": ("CI",),
+    "I2": ("CI",),
+    "SP1": ("CDR",),
+    "SP2": ("CDR",),
+    "F1": ("CDF",),
+    "F2": ("CDF",),
+    "N1": (),
+    "B1": (),
+    "P1": (),
+    "T1": (),
+    "G1": (),
+}
+EUROPEAN_CUPS: tuple[str, ...] = ("UCL", "UEL")
+
 
 def _result_letter(home: int, away: int) -> str:
     if home > away:

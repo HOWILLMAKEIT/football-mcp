@@ -16,9 +16,16 @@ Design rules for tool payloads:
 from __future__ import annotations
 
 import datetime as dt
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from mcp.server import MCPServer
+from mcp.server.mcpserver import (
+    AcceptedElicitation,
+    Elicit,
+    ElicitationResult,
+    Resolve,
+)
+from pydantic import BaseModel, Field
 
 from football_mcp.derive import (
     compute_head_to_head,
@@ -27,7 +34,12 @@ from football_mcp.derive import (
 )
 from football_mcp.models import Match
 from football_mcp.names import canonical
-from football_mcp.sources.espn import CUP_SLUGS, EspnSource
+from football_mcp.sources.espn import (
+    CUP_SLUGS,
+    EUROPEAN_CUPS,
+    LEAGUE_TO_DOMESTIC_CUPS,
+    EspnSource,
+)
 from football_mcp.sources.football_data import (
     SUPPORTED_COMPETITIONS,
     DataSourceError,
@@ -285,6 +297,111 @@ def _shift_season(season: str, back: int) -> str:
     return f"{start}-{str(start + 1)[2:]}"
 
 
+class ScopeConfirm(BaseModel):
+    """Elicitation form: which competition scope an analysis should cover."""
+
+    scope: Literal["league", "domestic_cups", "europe", "all"] = Field(
+        description=(
+            "league: league meetings only; domestic_cups: national cups of the "
+            "league's country; europe: UCL/UEL; all: everything"
+        )
+    )
+
+
+async def _resolve_h2h_scope(
+    team_a: str, team_b: str, competition: str, scope: str | None = None
+) -> ScopeConfirm | Elicit[ScopeConfirm]:
+    """Ask which scope to analyze when the caller did not specify one.
+
+    Runs before the tool body (SDK resolver). If the model already passed
+    `scope`, answer directly with zero round-trips.
+    """
+    if scope is not None:
+        return ScopeConfirm(scope=scope)  # type: ignore[arg-type]
+    return Elicit(
+        f"Which meetings should the {team_a} vs {team_b} head-to-head "
+        f"({competition}) include?",
+        ScopeConfirm,
+    )
+
+
+def _scope_bucket(code: str) -> str:
+    if code in EUROPEAN_CUPS:
+        return "europe"
+    if code in CUP_SLUGS:
+        return "domestic_cups"
+    return "league"
+
+
+async def _gather_scope_groups(
+    competition: str,
+    season: str,
+    seasons_back: int,
+    scope: str,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Load matches grouped per (competition, season) for the chosen scope.
+
+    League data comes from the CSV provider; cup data from ESPN
+    (two-window season fetch). Cups unavailable for a country are skipped.
+    """
+    provider = get_provider()
+    enhancement = provider.enhancement
+    espn = enhancement if hasattr(enhancement, "get_cup_season") else None
+    want_league = scope in ("league", "all")
+    want_domestic = scope in ("domestic_cups", "all")
+    want_europe = scope in ("europe", "all")
+
+    cup_codes: list[str] = []
+    if want_domestic:
+        cup_codes.extend(LEAGUE_TO_DOMESTIC_CUPS.get(competition.upper(), ()))
+    if want_europe:
+        cup_codes.extend(EUROPEAN_CUPS)
+
+    groups: list[dict[str, Any]] = []
+    skipped: list[str] = []
+
+    for back in range(seasons_back + 1):
+        season_label = _shift_season(season, back)
+        if want_league:
+            # The provider degrades fetch failures to empty lists + warning,
+            # so detect "no data at all" rather than catching exceptions.
+            season_result = await provider.get_season(competition, season_label)
+            degraded = (
+                not season_result.matches
+                and season_result.freshness.warning is not None
+                and "no data available" in season_result.freshness.warning
+            )
+            if degraded:
+                skipped.append(f"{competition}/{season_label}")
+            else:
+                groups.append(
+                    {
+                        "code": competition.upper(),
+                        "name": SUPPORTED_COMPETITIONS[competition.upper()],
+                        "season": season_label,
+                        "matches": season_result.matches,
+                    }
+                )
+        for code in cup_codes:
+            if espn is None:
+                skipped.append(f"{code}/{season_label}")
+                continue
+            try:
+                cup_matches = await espn.get_cup_season(code, season_label)
+            except DataSourceError:
+                skipped.append(f"{code}/{season_label}")
+                continue
+            groups.append(
+                {
+                    "code": code,
+                    "name": CUP_SLUGS[code][1],
+                    "season": season_label,
+                    "matches": cup_matches,
+                }
+            )
+    return groups, skipped
+
+
 @mcp.tool()
 async def get_head_to_head(
     team_a: str,
@@ -293,78 +410,106 @@ async def get_head_to_head(
     season: str,
     last: int = 10,
     seasons_back: int = 0,
+    scope: str | None = None,
+    scope_confirm: Annotated[
+        ElicitationResult[ScopeConfirm], Resolve(_resolve_h2h_scope)
+    ] = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
-    """Head-to-head meetings between two teams, one or many seasons.
+    """Head-to-head meetings between two teams across chosen competitions.
 
     Args:
         team_a, team_b: team names; loose matching on both sides.
-        competition: league code (both teams must play in it).
+        competition: league code (both teams must play in it); anchors which
+            country's domestic cups "domestic_cups" means.
         season: season label, e.g. "2025-26".
         last: how many recent meetings to return (1-20, default 10),
             newest first across the whole span.
         seasons_back: seasons to reach back beyond `season` (0 = single
-            season). E.g. season="2025-26", seasons_back=9 analyzes the
-            last 10 seasons. League meetings only (no cup competitions).
+            season). E.g. seasons_back=9 analyzes the last 10 seasons.
+        scope: "league" | "domestic_cups" | "europe" | "all". If omitted,
+            the user is asked which scope to analyze (elicitation); a
+            declined question falls back to "league".
 
-    Returns per-season details plus an aggregated summary (wins_a/wins_b/
-    draws/goals over every season loaded). Seasons whose data is missing
-    are skipped and listed in skipped_seasons.
+    Notes: cup ties decided on penalties count by their regulation score
+    (the `note` field on each match carries the shootout outcome). Two-legged
+    ties count each leg as one meeting. Cups have no odds.
     """
     competition = competition.upper()
     if competition not in SUPPORTED_COMPETITIONS:
         raise ValueError(f"unsupported competition code {competition!r}")
     last = max(1, min(int(last), 20))
     seasons_back = max(0, min(int(seasons_back), 30))
-    provider = get_provider()
 
-    per_season: list[dict[str, Any]] = []
+    scope_note = None
+    chosen_scope = scope
+    if isinstance(scope_confirm, AcceptedElicitation) and scope_confirm.data:
+        chosen_scope = scope_confirm.data.scope
+    elif scope is None:
+        # declined / cancelled elicitation: safe default, stated openly
+        chosen_scope = "league"
+        scope_note = "scope not specified and question declined; defaulted to league"
+
+    groups, skipped = await _gather_scope_groups(
+        competition, season, seasons_back, chosen_scope or "league"
+    )
+
+    per_group: list[dict[str, Any]] = []
+    by_scope: dict[str, dict[str, int]] = {}
     totals = {"matches": 0, "wins_a": 0, "wins_b": 0, "draws": 0, "goals_a": 0, "goals_b": 0}
     all_rows: list[dict] = []
-    skipped: list[str] = []
-    last_freshness: dict[str, Any] | None = None
     found_any = False
 
-    for back in range(seasons_back + 1):
-        season_label = _shift_season(season, back)
-        try:
-            result = await provider.get_season(competition, season_label)
-        except DataSourceError:
-            skipped.append(season_label)
-            continue
-        h2h = compute_head_to_head(team_a, team_b, result.matches, last=20)
+    for group in groups:
+        h2h = compute_head_to_head(team_a, team_b, group["matches"], last=20)
         if h2h is None:
-            # Season loads but holds no meetings between the two teams
-            # (or the season file was unavailable and degraded to a warning
-            # inside the provider): count as skipped, never fatal.
-            skipped.append(season_label)
+            # No meetings between the two teams in this competition/season:
+            # a valid zero, not a data gap -- not recorded in skipped.
             continue
         found_any = True
-        last_freshness = _freshness_view(result)
-        per_season.append(
-            {"season": season_label, "summary": h2h.summary}
+        per_group.append(
+            {
+                "competition": group["code"],
+                "name": group["name"],
+                "season": group["season"],
+                "scope": _scope_bucket(group["code"]),
+                "summary": h2h.summary,
+            }
+        )
+        bucket = _scope_bucket(group["code"])
+        bucket_totals = by_scope.setdefault(
+            bucket, {"matches": 0, "wins_a": 0, "wins_b": 0, "draws": 0,
+                     "goals_a": 0, "goals_b": 0}
         )
         for key in totals:
             totals[key] += h2h.summary.get(key, 0)
-        all_rows.extend(dict(row, season=season_label) for row in h2h.matches)
+            bucket_totals[key] += h2h.summary.get(key, 0)
+        all_rows.extend(
+            dict(row, season=group["season"], competition=group["code"])
+            for row in h2h.matches
+        )
 
     if not found_any:
         span = f"{_shift_season(season, seasons_back)}..{season}" if seasons_back else season
         raise ValueError(
             f"no played meetings between {team_a!r} and {team_b!r} in "
-            f"{competition} {span}"
+            f"{competition} {span} (scope={chosen_scope})"
         )
 
     all_rows.sort(key=lambda r: r["date"], reverse=True)
-    return {
+    result: dict[str, Any] = {
         "team_a": team_a,
         "team_b": team_b,
+        "scope": chosen_scope,
         "span": f"{_shift_season(season, seasons_back)}..{season}",
-        "per_season": per_season,
+        "per_season": per_group,
+        "by_scope": by_scope,
         "matches": all_rows[:last],
         "summary": totals,
         "skipped_seasons": skipped,
-        "freshness": last_freshness,
     }
+    if scope_note:
+        result["scope_note"] = scope_note
+    return result
 
 
 @mcp.tool()

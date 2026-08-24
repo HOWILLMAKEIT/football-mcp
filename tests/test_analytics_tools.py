@@ -130,12 +130,12 @@ class TestHeadToHead:
                 data = await _call(
                     client,
                     "get_head_to_head",
-                    {"team_a": "Arsenal", "team_b": "Chelsea",
+                    {"team_a": "Arsenal", "team_b": "Chelsea", "scope": "league",
                      "competition": "E0", "season": "2026-27"},
                 )
                 err = await client.call_tool(
                     "get_head_to_head",
-                    {"team_a": "Chelsea", "team_b": "Everton",
+                    {"team_a": "Chelsea", "team_b": "Everton", "scope": "league",
                      "competition": "E0", "season": "2026-27"},
                 )
         finally:
@@ -152,7 +152,7 @@ class TestHeadToHead:
                 data = await _call(
                     client,
                     "get_head_to_head",
-                    {"team_a": "Man United", "team_b": "Chelsea",
+                    {"team_a": "Man United", "team_b": "Chelsea", "scope": "league",
                      "competition": "E0", "season": "2026-27", "seasons_back": 2},
                 )
         finally:
@@ -163,7 +163,8 @@ class TestHeadToHead:
         assert data["summary"]["wins_a"] == 3
         assert data["summary"]["wins_b"] == 0
         assert [p["season"] for p in data["per_season"]] == ["2026-27", "2025-26"]
-        assert data["skipped_seasons"] == ["2024-25"]
+        # fetch-failure seasons are skipped; loaded-but-no-meetings are not
+        assert data["skipped_seasons"] == ["E0/2024-25"]  # stub raises for it
         assert data["span"] == "2024-25..2026-27"
         # newest-first across seasons
         assert data["matches"][0]["date"] == ROWS[0].date.isoformat()
