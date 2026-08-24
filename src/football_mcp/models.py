@@ -53,6 +53,13 @@ class Match(BaseModel):
     home_red_cards: int | None = None
     away_red_cards: int | None = None
 
+    # ESPN-only enrichments; football-data CSVs never carry these, so they
+    # stay None on CSV rows and may be filled by the ESPN enhancement source.
+    home_possession: float | None = None  # percent, e.g. 64.5
+    away_possession: float | None = None
+    home_assists: int | None = None  # goal assists
+    away_assists: int | None = None
+
     # Odds (decimal). Opening vs closing; Pinnacle vs market average.
     pinnacle_open: OddsTriple | None = None
     market_avg_open: OddsTriple | None = None

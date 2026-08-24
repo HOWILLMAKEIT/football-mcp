@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from football_mcp.models import Match
+from football_mcp.models import Match, OddsTriple
 from football_mcp.names import canonical, same_team
 from football_mcp.sources.merge import merge_matches
 
@@ -88,3 +88,21 @@ class TestMerge:
         assert len(merged) == 1
         assert merged[0].played is True
         assert merged[0].home_goals == 2
+
+    def test_played_rows_enrich_missing_fields(self):
+        """CSV row keeps its values and odds; ESPN fills only what is missing."""
+        csv_row = self._csv_match()
+        csv_row.home_shots = 19  # CSV official value
+        csv_row.market_avg_close = OddsTriple(home=1.4, draw=5.0, away=8.0)
+        api_row = self._api_match()
+        api_row.home_shots = 20  # conflicting: CSV wins
+        api_row.home_shots_on_target = 7  # missing in CSV: filled from ESPN
+        api_row.home_possession = 61.2  # ESPN-only: filled
+        merged = merge_matches([csv_row], [api_row])
+        assert len(merged) == 1
+        row = merged[0]
+        assert row.home_shots == 19  # base wins on conflict
+        assert row.home_shots_on_target == 7
+        assert row.home_possession == 61.2
+        assert row.market_avg_close is not None  # base-only richness preserved
+        assert row.home_team == "Man United"  # identity preserved

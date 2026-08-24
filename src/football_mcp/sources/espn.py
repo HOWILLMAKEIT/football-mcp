@@ -66,6 +66,42 @@ def _to_int(value: Any) -> int | None:
         return None
 
 
+def _to_float(value: Any) -> float | None:
+    try:
+        return float(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+# ESPN statistics[].name -> Match field suffix; possession is a percent float,
+# everything else an int. Semantics verified against football-data columns:
+# totalShots~HS/AS, shotsOnTarget~HST/AST, wonCorners~HC/AC, fouls~HF/AF.
+ESPN_STAT_MAP: dict[str, str] = {
+    "totalShots": "shots",
+    "shotsOnTarget": "shots_on_target",
+    "wonCorners": "corners",
+    "foulsCommitted": "fouls",
+    "yellowCards": "yellow_cards",
+    "redCards": "red_cards",
+    "goalAssists": "assists",
+    "possessionPct": "possession",
+}
+
+
+def _parse_stats(entries: list[dict[str, Any]] | None) -> dict[str, float | int]:
+    out: dict[str, float | int] = {}
+    for entry in entries or []:
+        field = ESPN_STAT_MAP.get(entry.get("name", ""))
+        if field is None:
+            continue
+        raw = entry.get("displayValue")
+        value: float | int | None
+        value = _to_float(raw) if field == "possession" else _to_int(raw)
+        if value is not None:
+            out[field] = value
+    return out
+
+
 def parse_scoreboard(payload: dict[str, Any], competition: str, season: str) -> list[Match]:
     """Parse an ESPN scoreboard response into Match models."""
     matches: list[Match] = []
@@ -100,6 +136,11 @@ def parse_scoreboard(payload: dict[str, Any], competition: str, season: str) -> 
                 fields["home_goals"] = home_goals
                 fields["away_goals"] = away_goals
                 fields["result"] = _result_letter(home_goals, away_goals)
+            # Team statistics, completed matches only: live stats are partial
+            # and must never be recorded as final values.
+            for prefix, side in (("home", home), ("away", away)):
+                for stat, value in _parse_stats(side.get("statistics")).items():
+                    fields[f"{prefix}_{stat}"] = value
         matches.append(Match.model_validate(fields))
     return matches
 

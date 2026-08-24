@@ -244,7 +244,24 @@ def _espn_event(
     away: str,
     home_score: str,
     away_score: str,
+    with_stats: bool = False,
 ) -> dict:
+    home_stats = [
+        {"name": "totalShots", "displayValue": "20"},
+        {"name": "shotsOnTarget", "displayValue": "6"},
+        {"name": "wonCorners", "displayValue": "8"},
+        {"name": "foulsCommitted", "displayValue": "10"},
+        {"name": "goalAssists", "displayValue": "2"},
+        {"name": "possessionPct", "displayValue": "64.5"},
+    ]
+    away_stats = [
+        {"name": "totalShots", "displayValue": "10"},
+        {"name": "shotsOnTarget", "displayValue": "3"},
+        {"name": "wonCorners", "displayValue": "2"},
+        {"name": "foulsCommitted", "displayValue": "12"},
+        {"name": "goalAssists", "displayValue": "0"},
+        {"name": "possessionPct", "displayValue": "35.5"},
+    ]
     return {
         "id": "1",
         "date": date_iso,
@@ -257,11 +274,13 @@ def _espn_event(
                         "homeAway": "home",
                         "team": {"displayName": home},
                         "score": home_score,
+                        "statistics": home_stats if with_stats else [],
                     },
                     {
                         "homeAway": "away",
                         "team": {"displayName": away},
                         "score": away_score,
+                        "statistics": away_stats if with_stats else [],
                     },
                 ]
             }
@@ -280,11 +299,14 @@ class TestEspnSource:
                 _espn_event(
                     f"{yesterday}T19:00Z", "post", True,
                     "Arsenal", "Coventry City", "3", "0",
+                    with_stats=True,
                 ),
                 # Real-data trap: pre matches already carry score "0".
                 _espn_event(
                     f"{tomorrow}T19:00Z", "pre", False,
                     "Fulham", "Chelsea", "0", "0",
+                    # live/pre matches can carry partial stats; must be ignored
+                    with_stats=True,
                 ),
             ]
         }
@@ -300,6 +322,27 @@ class TestEspnSource:
         assert pre.played is False
         assert pre.home_goals is None  # the "0" score must NOT become a draw
         assert pre.home_team == "Fulham"
+
+    def test_statistics_align_with_match_fields(self):
+        """ESPN stat names land on the same fields CSV columns populate."""
+        matches = parse_scoreboard(self._payload(), "E0", "2026-27")
+        played, pre = matches
+        # aligned with CSV semantics (HS/AS, HST/AST, HC/AC, HF/AF)
+        assert played.home_shots == 20
+        assert played.away_shots == 10
+        assert played.home_shots_on_target == 6
+        assert played.away_shots_on_target == 3
+        assert played.home_corners == 8
+        assert played.away_corners == 2
+        assert played.home_fouls == 10
+        assert played.away_fouls == 12
+        # ESPN-only fields
+        assert played.home_possession == 64.5
+        assert played.away_possession == 35.5
+        assert played.home_assists == 2
+        # partial stats on unplayed matches must never leak
+        assert pre.home_possession is None
+        assert pre.home_shots is None
 
     async def test_get_fixtures_parses_and_caches(self, tmp_path):
         calls: list[int] = []

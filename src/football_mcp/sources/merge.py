@@ -13,12 +13,49 @@ def _key(match: Match) -> tuple:
     return (match.date, canonical(match.home_team), canonical(match.away_team))
 
 
+# Fields that may be filled into a base row from a duplicate enhancement row
+# when the base value is missing (e.g. ESPN possession/assists on a CSV row).
+ENRICHABLE_FIELDS = (
+    "home_shots",
+    "away_shots",
+    "home_shots_on_target",
+    "away_shots_on_target",
+    "home_corners",
+    "away_corners",
+    "home_fouls",
+    "away_fouls",
+    "home_yellow_cards",
+    "away_yellow_cards",
+    "home_red_cards",
+    "away_red_cards",
+    "home_possession",
+    "away_possession",
+    "home_assists",
+    "away_assists",
+)
+
+
+def _enrich(base: Match, extra: Match) -> Match:
+    """Fill missing stat fields of `base` from `extra`; base values win."""
+    updates = {
+        field: getattr(extra, field)
+        for field in ENRICHABLE_FIELDS
+        if getattr(base, field) is None and getattr(extra, field) is not None
+    }
+    return base.model_copy(update=updates) if updates else base
+
+
 def merge_matches(base: list[Match], extra: list[Match]) -> list[Match]:
     """Merge two match lists, deduplicated by date + canonical teams.
 
-    Base (football-data CSV) rows win because they carry stats and odds. One
-    exception: when the base row is an *unplayed* fixture (stale CSV) and the
-    extra row carries the finished result, the extra row replaces it in place.
+    Rules on duplicate (date, home, away):
+    1. base unplayed + extra played  -> extra replaces base (stale CSV row
+       superseded by the finished result).
+    2. both played -> keep the (richer) base row but fill its missing stat
+       fields from extra (e.g. CSV keeps odds; ESPN contributes possession).
+       Conflicting values resolve in favor of base.
+    3. otherwise -> base row stands (odds/stats win over bare scores).
+
     Rows without a date are appended.
     """
     index: dict[tuple, int] = {}
@@ -32,7 +69,9 @@ def merge_matches(base: list[Match], extra: list[Match]) -> list[Match]:
         if key is not None and key in index:
             position = index[key]
             if not merged[position].played and match.played:
-                merged[position] = match  # overdue CSV row superseded by result
+                merged[position] = match  # rule 1: result supersedes fixture
+            elif merged[position].played and match.played:
+                merged[position] = _enrich(merged[position], match)  # rule 2
         else:
             if key is not None:
                 index[key] = len(merged)
