@@ -22,12 +22,27 @@ ROWS = [
           home_team="Chelsea", away_team="Arsenal", home_goals=1, away_goals=3, result="A"),
 ]
 
+# A second, older season for cross-season h2h: Man United beat Chelsea twice.
+ROWS_OLD = [
+    Match(competition="E0", season="2025-26", date=dt.date(2025, 8, 1),
+          home_team="Chelsea", away_team="Man United", home_goals=0, away_goals=2, result="A"),
+    Match(competition="E0", season="2025-26", date=dt.date(2025, 12, 1),
+          home_team="Man United", away_team="Chelsea", home_goals=3, away_goals=1, result="H"),
+]
+
 
 class StubCsv:
+    """Serves two real seasons; everything older is 'not published'."""
+
+    def __init__(self) -> None:
+        self._by_season = {"2026-27": ROWS, "2025-26": ROWS_OLD}
+
     async def get_season(self, competition, season):
         if competition.upper() != "E0":
             raise DataSourceError(f"unsupported competition code: {competition!r}")
-        return ROWS
+        if season not in self._by_season:
+            raise DataSourceError(f"season {season} for E0 is not published yet")
+        return self._by_season[season]
 
 
 class StubEspn:
@@ -128,3 +143,28 @@ class TestHeadToHead:
         assert data["summary"]["wins_a"] == 1
         assert len(data["matches"]) == 1
         assert err.is_error
+
+    async def test_cross_season_h2h(self):
+        """seasons_back aggregates per-season summaries and skips missing."""
+        server_module._provider = SeasonProvider(StubCsv(), StubEspn())
+        try:
+            async with Client(server_module.mcp) as client:
+                data = await _call(
+                    client,
+                    "get_head_to_head",
+                    {"team_a": "Man United", "team_b": "Chelsea",
+                     "competition": "E0", "season": "2026-27", "seasons_back": 2},
+                )
+        finally:
+            server_module._provider = None
+        # 2026-27: one meeting (ManU won) + 2025-26: two (ManU won both);
+        # 2024-25 does not exist in the stub -> skipped
+        assert data["summary"]["matches"] == 3
+        assert data["summary"]["wins_a"] == 3
+        assert data["summary"]["wins_b"] == 0
+        assert [p["season"] for p in data["per_season"]] == ["2026-27", "2025-26"]
+        assert data["skipped_seasons"] == ["2024-25"]
+        assert data["span"] == "2024-25..2026-27"
+        # newest-first across seasons
+        assert data["matches"][0]["date"] == ROWS[0].date.isoformat()
+        assert data["matches"][0]["season"] == "2026-27"

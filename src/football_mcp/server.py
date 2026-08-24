@@ -277,6 +277,12 @@ async def get_team_form(
     }
 
 
+def _shift_season(season: str, back: int) -> str:
+    """'2025-26' shifted back n years -> '2023-24'."""
+    start = int(season[:4]) - back
+    return f"{start}-{str(start + 1)[2:]}"
+
+
 @mcp.tool()
 async def get_head_to_head(
     team_a: str,
@@ -284,36 +290,78 @@ async def get_head_to_head(
     competition: str,
     season: str,
     last: int = 10,
+    seasons_back: int = 0,
 ) -> dict[str, Any]:
-    """Head-to-head meetings between two teams within one season.
+    """Head-to-head meetings between two teams, one or many seasons.
 
     Args:
         team_a, team_b: team names; loose matching on both sides.
         competition: league code (both teams must play in it).
         season: season label, e.g. "2025-26".
-        last: how many recent meetings to return (1-20, default 10).
+        last: how many recent meetings to return (1-20, default 10),
+            newest first across the whole span.
+        seasons_back: seasons to reach back beyond `season` (0 = single
+            season). E.g. season="2025-26", seasons_back=9 analyzes the
+            last 10 seasons. League meetings only (no cup competitions).
+
+    Returns per-season details plus an aggregated summary (wins_a/wins_b/
+    draws/goals over every season loaded). Seasons whose data is missing
+    are skipped and listed in skipped_seasons.
     """
     competition = competition.upper()
     if competition not in SUPPORTED_COMPETITIONS:
         raise ValueError(f"unsupported competition code {competition!r}")
     last = max(1, min(int(last), 20))
+    seasons_back = max(0, min(int(seasons_back), 30))
     provider = get_provider()
-    try:
-        result = await provider.get_season(competition, season)
-    except DataSourceError as exc:
-        raise ValueError(str(exc)) from exc
-    h2h = compute_head_to_head(team_a, team_b, result.matches, last=last)
-    if h2h is None:
+
+    per_season: list[dict[str, Any]] = []
+    totals = {"matches": 0, "wins_a": 0, "wins_b": 0, "draws": 0, "goals_a": 0, "goals_b": 0}
+    all_rows: list[dict] = []
+    skipped: list[str] = []
+    last_freshness: dict[str, Any] | None = None
+    found_any = False
+
+    for back in range(seasons_back + 1):
+        season_label = _shift_season(season, back)
+        try:
+            result = await provider.get_season(competition, season_label)
+        except DataSourceError:
+            skipped.append(season_label)
+            continue
+        h2h = compute_head_to_head(team_a, team_b, result.matches, last=20)
+        if h2h is None:
+            # Season loads but holds no meetings between the two teams
+            # (or the season file was unavailable and degraded to a warning
+            # inside the provider): count as skipped, never fatal.
+            skipped.append(season_label)
+            continue
+        found_any = True
+        last_freshness = _freshness_view(result)
+        per_season.append(
+            {"season": season_label, "summary": h2h.summary}
+        )
+        for key in totals:
+            totals[key] += h2h.summary.get(key, 0)
+        all_rows.extend(dict(row, season=season_label) for row in h2h.matches)
+
+    if not found_any:
+        span = f"{_shift_season(season, seasons_back)}..{season}" if seasons_back else season
         raise ValueError(
             f"no played meetings between {team_a!r} and {team_b!r} in "
-            f"{competition} {season}"
+            f"{competition} {span}"
         )
+
+    all_rows.sort(key=lambda r: r["date"], reverse=True)
     return {
-        "team_a": h2h.team_a,
-        "team_b": h2h.team_b,
-        "matches": h2h.matches,
-        "summary": h2h.summary,
-        "freshness": _freshness_view(result),
+        "team_a": team_a,
+        "team_b": team_b,
+        "span": f"{_shift_season(season, seasons_back)}..{season}",
+        "per_season": per_season,
+        "matches": all_rows[:last],
+        "summary": totals,
+        "skipped_seasons": skipped,
+        "freshness": last_freshness,
     }
 
 
