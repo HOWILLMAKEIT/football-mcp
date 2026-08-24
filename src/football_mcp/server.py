@@ -20,6 +20,11 @@ from typing import Any
 
 from mcp.server import MCPServer
 
+from football_mcp.derive import (
+    compute_head_to_head,
+    compute_standings,
+    compute_team_form,
+)
 from football_mcp.models import Match
 from football_mcp.names import canonical
 from football_mcp.sources.espn import EspnSource
@@ -164,6 +169,152 @@ def list_competitions() -> dict[str, str]:
     Codes are used in every other tool (e.g. 'E0' = English Premier League).
     """
     return dict(SUPPORTED_COMPETITIONS)
+
+
+@mcp.tool()
+async def list_teams(competition: str, season: str) -> dict[str, Any]:
+    """List teams recorded in a competition season, with per-team match counts.
+
+    Use this for team-name discovery before filtering by team in get_matches:
+    names here are exactly the names that source rows carry (e.g. 'Man United').
+    """
+    competition = competition.upper()
+    if competition not in SUPPORTED_COMPETITIONS:
+        raise ValueError(
+            f"unsupported competition code {competition!r}; "
+            "call list_competitions for the valid codes"
+        )
+    provider = get_provider()
+    try:
+        result = await provider.get_season(competition, season)
+    except DataSourceError as exc:
+        raise ValueError(str(exc)) from exc
+    counts: dict[str, int] = {}
+    for m in result.matches:
+        counts[m.home_team] = counts.get(m.home_team, 0) + 1
+        counts[m.away_team] = counts.get(m.away_team, 0) + 1
+    return {
+        "teams": sorted(counts),
+        "counts": dict(sorted(counts.items())),
+        "freshness": _freshness_view(result),
+    }
+
+
+@mcp.tool()
+async def get_standings(
+    competition: str,
+    season: str,
+    as_of_date: str | None = None,
+) -> dict[str, Any]:
+    """League table replayed from played matches (leakage-safe).
+
+    Args:
+        competition: league code, e.g. "E0".
+        season: season label, e.g. "2025-26".
+        as_of_date: optional "YYYY-MM-DD" cutoff; the table then reflects
+            only matches played up to that date (no future leakage).
+
+    Note: administrative points deductions are not in the data; tables for
+    deduction seasons can differ from official ones.
+    """
+    competition = competition.upper()
+    if competition not in SUPPORTED_COMPETITIONS:
+        raise ValueError(f"unsupported competition code {competition!r}")
+    cutoff = _parse_date(as_of_date, "as_of_date")
+    provider = get_provider()
+    try:
+        result = await provider.get_season(competition, season)
+    except DataSourceError as exc:
+        raise ValueError(str(exc)) from exc
+    rows = compute_standings(result.matches, as_of_date=cutoff)
+    return {
+        "rows": [r.model_dump(mode="json") for r in rows],
+        "count": len(rows),
+        "as_of_date": cutoff.isoformat() if cutoff else None,
+        "freshness": _freshness_view(result),
+    }
+
+
+@mcp.tool()
+async def get_team_form(
+    team: str,
+    competition: str,
+    season: str,
+    last: int = 10,
+    as_of_date: str | None = None,
+) -> dict[str, Any]:
+    """Recent form of one team: last N played matches, newest first, + summary.
+
+    Args:
+        team: team name; loose matching ("Man United" finds "Manchester Utd").
+        competition: league code, e.g. "E0".
+        season: season label, e.g. "2025-26".
+        last: how many recent matches to return (1-20, default 10).
+        as_of_date: optional cutoff for leakage-safe historical analysis.
+    """
+    competition = competition.upper()
+    if competition not in SUPPORTED_COMPETITIONS:
+        raise ValueError(f"unsupported competition code {competition!r}")
+    last = max(1, min(int(last), 20))
+    cutoff = _parse_date(as_of_date, "as_of_date")
+    provider = get_provider()
+    try:
+        result = await provider.get_season(competition, season)
+    except DataSourceError as exc:
+        raise ValueError(str(exc)) from exc
+    form = compute_team_form(team, result.matches, last=last, as_of_date=cutoff)
+    if form is None:
+        raise ValueError(
+            f"no played matches found for team {team!r} in "
+            f"{competition} {season}; call list_teams to see valid names"
+        )
+    return {
+        "team": form.team,
+        "entries": [e.model_dump(mode="json") for e in form.entries],
+        "summary": form.summary,
+        "as_of_date": cutoff.isoformat() if cutoff else None,
+        "freshness": _freshness_view(result),
+    }
+
+
+@mcp.tool()
+async def get_head_to_head(
+    team_a: str,
+    team_b: str,
+    competition: str,
+    season: str,
+    last: int = 10,
+) -> dict[str, Any]:
+    """Head-to-head meetings between two teams within one season.
+
+    Args:
+        team_a, team_b: team names; loose matching on both sides.
+        competition: league code (both teams must play in it).
+        season: season label, e.g. "2025-26".
+        last: how many recent meetings to return (1-20, default 10).
+    """
+    competition = competition.upper()
+    if competition not in SUPPORTED_COMPETITIONS:
+        raise ValueError(f"unsupported competition code {competition!r}")
+    last = max(1, min(int(last), 20))
+    provider = get_provider()
+    try:
+        result = await provider.get_season(competition, season)
+    except DataSourceError as exc:
+        raise ValueError(str(exc)) from exc
+    h2h = compute_head_to_head(team_a, team_b, result.matches, last=last)
+    if h2h is None:
+        raise ValueError(
+            f"no played meetings between {team_a!r} and {team_b!r} in "
+            f"{competition} {season}"
+        )
+    return {
+        "team_a": h2h.team_a,
+        "team_b": h2h.team_b,
+        "matches": h2h.matches,
+        "summary": h2h.summary,
+        "freshness": _freshness_view(result),
+    }
 
 
 @mcp.tool()
