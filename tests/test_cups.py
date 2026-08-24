@@ -43,6 +43,19 @@ class TestParseNote:
         assert m.played is True
         assert m.result == "D"  # regulation draw...
         assert m.note == "Oxford United advance 4-3 on penalties"  # ...settled on pens
+        assert m.shootout_winner == "Oxford United"
+
+    def test_leg_note_has_no_shootout_winner(self):
+        events = [_event("2026-04-29", "Atlético Madrid", "Arsenal",
+                         "1", "1", True, "1st Leg")]
+        matches = parse_scoreboard({"events": events}, "UCL", "2025-26")
+        assert matches[0].shootout_winner is None
+
+    def test_leg_penalty_note_parses(self):
+        events = [_event("2026-02-11", "A", "B", "1", "1", True,
+                         "2nd Leg - Ac Milan advance 4-3 on penalties")]
+        matches = parse_scoreboard({"events": events}, "UCL", "2025-26")
+        assert matches[0].shootout_winner == "Ac Milan"
 
 
 class TestCupSeason:

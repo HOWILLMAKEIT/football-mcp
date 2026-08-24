@@ -462,8 +462,9 @@ async def get_head_to_head(
             the user is asked which scope to analyze (elicitation); a
             declined question falls back to "league".
 
-    Notes: cup ties decided on penalties count by their regulation score
-    (the `note` field on each match carries the shootout outcome). Two-legged
+    Notes: cup ties decided on penalties count as wins for the shootout
+    winner (`pen_wins_a`/`pen_wins_b` disclose how many wins came via
+    penalties; goals count regulation/extra time only). Two-legged
     ties count each leg as one meeting. Cups have no odds. The response
     breaks totals down both `by_scope` (league/domestic_cups/europe) and
     `by_competition` (e.g. UCL vs UEL separately).
@@ -499,7 +500,8 @@ async def get_head_to_head(
     per_group: list[dict[str, Any]] = []
     by_scope: dict[str, dict[str, int]] = {}
     by_competition: dict[str, dict[str, Any]] = {}
-    totals = {"matches": 0, "wins_a": 0, "wins_b": 0, "draws": 0, "goals_a": 0, "goals_b": 0}
+    totals = {"matches": 0, "wins_a": 0, "wins_b": 0, "draws": 0, "goals_a": 0, "goals_b": 0,
+              "pen_wins_a": 0, "pen_wins_b": 0}
     all_rows: list[dict] = []
     found_any = False
 
@@ -522,12 +524,13 @@ async def get_head_to_head(
         bucket = _scope_bucket(group["code"])
         bucket_totals = by_scope.setdefault(
             bucket, {"matches": 0, "wins_a": 0, "wins_b": 0, "draws": 0,
-                     "goals_a": 0, "goals_b": 0}
+                     "goals_a": 0, "goals_b": 0, "pen_wins_a": 0, "pen_wins_b": 0}
         )
         comp_entry = by_competition.setdefault(
             group["code"], {"name": group["name"], "scope": bucket,
                             "matches": 0, "wins_a": 0, "wins_b": 0, "draws": 0,
-                            "goals_a": 0, "goals_b": 0}
+                            "goals_a": 0, "goals_b": 0,
+                            "pen_wins_a": 0, "pen_wins_b": 0}
         )
         for key in totals:
             totals[key] += h2h.summary.get(key, 0)

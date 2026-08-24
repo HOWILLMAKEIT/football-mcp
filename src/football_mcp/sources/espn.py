@@ -17,6 +17,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -172,6 +173,14 @@ def parse_scoreboard(payload: dict[str, Any], competition: str, season: str) -> 
             note_text = (notes[0].get("headline") or notes[0].get("text") or "").strip()
             if note_text:
                 fields["note"] = note_text  # e.g. "1st Leg", "advance 4-3 on penalties"
+                # "X advance 4-3 on penalties" -> shootout winner X (score stays
+                # the regulation/extra-time result).
+                pen = re.match(
+                    r"^(?:\d(?:st|nd|rd|th) Leg - )?(.+?) advance \d+-\d+ on penalties$",
+                    note_text,
+                )
+                if pen:
+                    fields["shootout_winner"] = pen.group(1).strip()
         if completed:
             home_goals = _to_int(home.get("score"))
             away_goals = _to_int(away.get("score"))

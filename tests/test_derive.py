@@ -140,3 +140,30 @@ class TestHeadToHead:
 
     def test_no_meetings_returns_none(self):
         assert compute_head_to_head("Arsenal", "Everton", [_m(D1, "A", "B", 1, 0)]) is None
+
+    def test_penalty_shootout_counts_as_final_win(self):
+        """A tie decided on penalties is a WIN for the shootout winner;
+        pen_wins_* disclose it; goals stay regulation-only."""
+        shootout = _m(dt.date(2026, 1, 9), "Arsenal", "Everton", 2, 2)
+        shootout.shootout_winner = "Arsenal"
+        h2h = compute_head_to_head(
+            "Arsenal", "Everton", [shootout, _m(dt.date(2026, 2, 1), "Everton", "Arsenal", 0, 3)]
+        )
+        assert h2h is not None
+        assert h2h.summary["wins_a"] == 2  # shootout + regulation win
+        assert h2h.summary["draws"] == 0  # no phantom draw
+        assert h2h.summary["pen_wins_a"] == 1
+        assert h2h.summary["pen_wins_b"] == 0
+        assert h2h.summary["goals_a"] == 5  # 2 + 3 regulation goals only
+        assert h2h.summary["goals_b"] == 2
+        # the shootout row explains itself: winner A with a level score
+        assert h2h.matches[-1]["winner"] == "A"  # oldest row = the shootout tie
+        assert h2h.matches[-1]["score"] == "2-2"
+
+    def test_shootout_winner_side_b(self):
+        shootout = _m(D1, "Arsenal", "Everton", 1, 1)
+        shootout.shootout_winner = "Everton"
+        h2h = compute_head_to_head("Arsenal", "Everton", [shootout])
+        assert h2h.summary["wins_b"] == 1
+        assert h2h.summary["pen_wins_b"] == 1
+        assert h2h.matches[0]["winner"] == "B"

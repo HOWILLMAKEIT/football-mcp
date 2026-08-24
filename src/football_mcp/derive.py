@@ -201,10 +201,17 @@ def compute_head_to_head(
     matches: list[Match],
     last: int = 10,
 ) -> HeadToHead | None:
-    """Meetings between two teams, newest first."""
+    """Meetings between two teams, newest first.
+
+    Ties decided on penalties count as wins for the shootout winner (win
+    rate reflects the final outcome); `pen_wins_a`/`pen_wins_b` disclose how
+    many wins came that way, so the regulation-only view can be recovered.
+    Goals always count the regulation/extra-time score only.
+    """
     key_a, key_b = canonical(team_a), canonical(team_b)
     rows: list[dict] = []
     wins_a = wins_b = draws = goals_a = goals_b = 0
+    pen_wins_a = pen_wins_b = 0
     for match in sorted(matches, key=lambda m: m.date or dt.date.min):
         if not match.played or match.date is None:
             continue
@@ -216,7 +223,16 @@ def compute_head_to_head(
         a_is_home = home_key == key_a
         ga = match.home_goals if a_is_home else match.away_goals
         gb = match.away_goals if a_is_home else match.home_goals
-        winner = "A" if ga > gb else ("B" if gb > ga else "draw")
+        winner: str | None
+        if match.shootout_winner:
+            sw = canonical(match.shootout_winner)
+            winner = "A" if sw == key_a else ("B" if sw == key_b else None)
+            if winner == "A":
+                pen_wins_a += 1
+            elif winner == "B":
+                pen_wins_b += 1
+        else:
+            winner = "A" if ga > gb else ("B" if gb > ga else "draw")
         if winner == "A":
             wins_a += 1
         elif winner == "B":
@@ -225,15 +241,16 @@ def compute_head_to_head(
             draws += 1
         goals_a += ga
         goals_b += gb
-        rows.append(
-            {
-                "date": match.date.isoformat(),
-                "home": match.home_team,
-                "away": match.away_team,
-                "score": f"{match.home_goals}-{match.away_goals}",
-                "winner": winner,
-            }
-        )
+        row = {
+            "date": match.date.isoformat(),
+            "home": match.home_team,
+            "away": match.away_team,
+            "score": f"{match.home_goals}-{match.away_goals}",
+            "winner": winner or "draw",
+        }
+        if match.note:
+            row["note"] = match.note
+        rows.append(row)
     if not rows:
         return None
     selected = rows[-last:]
@@ -248,5 +265,7 @@ def compute_head_to_head(
             "draws": draws,
             "goals_a": goals_a,
             "goals_b": goals_b,
+            "pen_wins_a": pen_wins_a,
+            "pen_wins_b": pen_wins_b,
         },
     )
