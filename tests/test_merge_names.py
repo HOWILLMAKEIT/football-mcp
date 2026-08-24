@@ -70,3 +70,14 @@ class TestMerge:
         api_new.date = dt.date(2026, 8, 14)
         merged = merge_matches([self._csv_match()], [api_new])
         assert [m.date for m in merged] == [dt.date(2026, 8, 14), dt.date(2026, 8, 15)]
+
+    def test_played_api_row_replaces_overdue_csv_fixture(self):
+        """Stale CSV fixture (no result) must yield to the API result row."""
+        csv_row = self._csv_match()
+        csv_row.home_goals = None
+        csv_row.away_goals = None
+        csv_row.result = None
+        merged = merge_matches([csv_row], [self._api_match()])
+        assert len(merged) == 1
+        assert merged[0].played is True
+        assert merged[0].home_goals == 2

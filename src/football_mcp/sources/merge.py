@@ -14,17 +14,28 @@ def _key(match: Match) -> tuple:
 
 
 def merge_matches(base: list[Match], extra: list[Match]) -> list[Match]:
-    """Add `extra` rows not already in `base`, deduplicated by date + teams.
+    """Merge two match lists, deduplicated by date + canonical teams.
 
-    Base (football-data CSV) rows win because they carry stats and odds; the
-    API rows only fill the freshness gap. Rows without a date are appended.
+    Base (football-data CSV) rows win because they carry stats and odds. One
+    exception: when the base row is an *unplayed* fixture (stale CSV) and the
+    extra row carries the finished result, the extra row replaces it in place.
+    Rows without a date are appended.
     """
-    seen = {_key(m) for m in base if m.date is not None}
-    merged = list(base)
+    index: dict[tuple, int] = {}
+    merged: list[Match] = []
+    for match in base:
+        if match.date is not None:
+            index.setdefault(_key(match), len(merged))
+        merged.append(match)
     for match in extra:
-        if match.date is None or _key(match) not in seen:
+        key = _key(match) if match.date is not None else None
+        if key is not None and key in index:
+            position = index[key]
+            if not merged[position].played and match.played:
+                merged[position] = match  # overdue CSV row superseded by result
+        else:
+            if key is not None:
+                index[key] = len(merged)
             merged.append(match)
-            if match.date is not None:
-                seen.add(_key(match))
     merged.sort(key=lambda m: (m.date is None, m.date or m.home_team))
     return merged

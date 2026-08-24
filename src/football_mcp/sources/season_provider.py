@@ -1,26 +1,18 @@
 """Season provider: freshness ladder over CSV + API-Football.
 
-Decision table (today = UTC today):
+Staleness is fixture-aware, not calendar-aware:
 
-- CSV latest played match >= yesterday  -> CSV only, zero API cost.
-- Gap (stale or unpublished season file):
-    * key configured -> fetch the gap window from API-Football and merge,
-    * no key -> CSV only, with an explicit staleness warning.
-
-The returned Freshness object tells tools (and their calling agents) exactly
-how fresh the data is and why.
-
-赛季数据提供器：在 CSV 与 API-Football 之间按数据新鲜度逐级选择。
-
-决策表（today 为当前 UTC 日期）：
-
-- CSV 中最近一场已完赛比赛不早于昨天：仅使用 CSV，不消耗 API 配额。
-- 存在数据空档（CSV 陈旧或赛季文件尚未发布）：
-    * 已配置密钥：从 API-Football 获取空档时间段的数据并合并；
-    * 未配置密钥：仅使用 CSV，并返回明确的数据陈旧警告。
-
-返回的 Freshness 对象会准确告知工具及调用它们的 Agent：数据有多新，以及形成
-当前新鲜度状态的原因。
+- The CSV itself lists scheduled fixtures (rows with teams but no result).
+  A fixture whose kickoff is >2h in the past but still has no result is
+  "overdue": the data is stale *for that match*, and only then do we refresh
+  the gap window from API-Football. This detects a finished match the same
+  evening (kickoff + ~2h), instead of guessing whether "last night had games".
+- If no fixture is overdue, data is complete for every scheduled match:
+  no API call at all -- even mid-break when the latest result is weeks old
+  (a calendar heuristic would false-positive here and burn quota).
+- Fallbacks: files that list no future fixtures fall back to day-based
+  staleness; a current-season file silent for >45 days is treated as
+  concluded (summer break). Past seasons are immutable: never refreshed.
 """
 
 from __future__ import annotations
@@ -31,8 +23,17 @@ from pydantic import BaseModel
 
 from football_mcp.models import Match
 from football_mcp.sources.api_football import ApiFootballSource
-from football_mcp.sources.football_data import DataSourceError, FootballDataSource
+from football_mcp.sources.football_data import (
+    DataSourceError,
+    FootballDataSource,
+    is_past_season,
+)
 from football_mcp.sources.merge import merge_matches
+
+# A football match: 90 min + halftime + stoppage. The CSV kick_off is UK local
+# time; treating it as UTC is off by at most 1h in summer, which the margin
+# absorbs comfortably.
+MATCH_DURATION = dt.timedelta(hours=2)
 
 
 class Freshness(BaseModel):
@@ -48,8 +49,38 @@ class SeasonResult(BaseModel):
     freshness: Freshness
 
 
-def _today() -> dt.date:
-    return dt.datetime.now(tz=dt.UTC).date()
+def _now() -> dt.datetime:
+    return dt.datetime.now(tz=dt.UTC)
+
+
+def _kickoff_utc(match: Match) -> dt.datetime | None:
+    if match.date is None or not match.kick_off:
+        return None
+    try:
+        clock = dt.time.fromisoformat(match.kick_off.strip())
+    except ValueError:
+        return None
+    return dt.datetime.combine(match.date, clock, tzinfo=dt.UTC)
+
+
+def overdue_fixtures(matches: list[Match], now: dt.datetime) -> list[Match]:
+    """Scheduled matches that should have finished by `now` but lack a result."""
+    overdue: list[Match] = []
+    for match in matches:
+        if match.played or match.date is None:
+            continue
+        if match.date < now.date():
+            overdue.append(match)  # any earlier date is unambiguously past
+            continue
+        kickoff = _kickoff_utc(match)
+        if kickoff is not None and now >= kickoff + MATCH_DURATION:
+            overdue.append(match)
+    return overdue
+
+
+def _latest_played(matches: list[Match]) -> dt.date | None:
+    dates = [m.date for m in matches if m.played and m.date is not None]
+    return max(dates) if dates else None
 
 
 class SeasonProvider:
@@ -70,20 +101,36 @@ class SeasonProvider:
         except DataSourceError as exc:
             csv_error = str(exc)
 
-        played_dates = [m.date for m in base if m.played and m.date is not None]
-        csv_latest = max(played_dates) if played_dates else None
-        today = _today()
-        stale = csv_latest is None or csv_latest < today - dt.timedelta(days=1)
-
-        freshness = Freshness(csv_latest_played=csv_latest)
+        now = _now()
+        today = now.date()
+        latest_played = _latest_played(base)
+        freshness = Freshness(csv_latest_played=latest_played)
         matches = base
 
-        if stale and self.api_source is not None and self.api_source.has_key:
-            date_from = (
-                csv_latest + dt.timedelta(days=1)
-                if csv_latest is not None
-                else dt.date(int(season[:4]), 8, 1)
-            )
+        overdue = overdue_fixtures(base, now)
+        has_future_rows = any(
+            (not m.played) and m.date is not None and m.date >= today for m in base
+        )
+        season_over = is_past_season(season) or (
+            latest_played is not None
+            and not has_future_rows
+            and (today - latest_played) > dt.timedelta(days=45)
+        )
+        # Day-based fallback only for files that never list future fixtures.
+        day_stale = (
+            not has_future_rows and latest_played is not None and latest_played < today
+        )
+        needs_refresh = not season_over and (
+            csv_error is not None or not base or bool(overdue) or day_stale
+        )
+
+        if needs_refresh and self.api_source is not None and self.api_source.has_key:
+            if overdue:
+                date_from = min(m.date for m in overdue)
+            elif latest_played is not None:
+                date_from = latest_played + dt.timedelta(days=1)
+            else:
+                date_from = dt.date(int(season[:4]), 8, 1)
             if date_from <= today:
                 try:
                     extra = await self.api_source.get_fixtures(
@@ -93,9 +140,7 @@ class SeasonProvider:
                     freshness.warning = f"api-football unavailable: {exc}"
                 else:
                     matches = merge_matches(base, extra)
-                    api_dates = [
-                        m.date for m in extra if m.played and m.date is not None
-                    ]
+                    api_dates = [m.date for m in extra if m.played and m.date]
                     freshness.api_used = True
                     freshness.api_latest_played = max(api_dates) if api_dates else None
                     freshness.quota_remaining = (
@@ -103,9 +148,7 @@ class SeasonProvider:
                     )
 
         if freshness.warning is None:
-            latest = max(
-                d for d in [freshness.csv_latest_played, freshness.api_latest_played] if d
-            )
+            still_overdue = overdue_fixtures(matches, now)
             if not matches:
                 reason = f"csv unavailable ({csv_error})" if csv_error else "csv empty"
                 if self.api_source is None or not self.api_source.has_key:
@@ -115,16 +158,19 @@ class SeasonProvider:
                     )
                 else:
                     freshness.warning = f"no data available: {reason}; api returned nothing"
-            elif latest is not None and latest < today - dt.timedelta(days=1):
+            elif still_overdue:
+                first = still_overdue[0]
+                label = f"{first.home_team} vs {first.away_team} on {first.date}"
                 if freshness.api_used:
                     freshness.warning = (
-                        f"data may be stale: latest match {latest}; "
-                        "api-football returned no newer fixtures"
+                        f"{len(still_overdue)} scheduled match(es) still missing "
+                        f"results after api refresh (e.g. {label})"
                     )
                 else:
                     freshness.warning = (
-                        f"data may be stale: latest match {latest}; "
-                        "configure FOOTBALL_MCP_API_FOOTBALL_KEY for fresher results"
+                        f"data may be stale: {len(still_overdue)} match(es) look "
+                        f"finished but have no result (e.g. {label}); configure "
+                        "FOOTBALL_MCP_API_FOOTBALL_KEY"
                     )
 
         return SeasonResult(matches=matches, freshness=freshness)

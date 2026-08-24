@@ -12,9 +12,14 @@ from football_mcp.sources.football_data import DataSourceError
 from football_mcp.sources.season_provider import SeasonProvider
 
 
-def _payload(status: str = "FT", home: int | None = 2, away: int | None = 1) -> dict:
-    # Fixture sits "last night": inside any gap window the provider computes.
-    last_night = dt.date.today() - dt.timedelta(days=1)
+def _payload(
+    status: str = "FT",
+    home: int | None = 2,
+    away: int | None = 1,
+    date: dt.date | None = None,
+) -> dict:
+    # Default fixture sits "last night": inside any gap window.
+    day = date or dt.date.today() - dt.timedelta(days=1)
     return {
         "results": 1,
         "errors": [],
@@ -22,7 +27,7 @@ def _payload(status: str = "FT", home: int | None = 2, away: int | None = 1) -> 
             {
                 "fixture": {
                     "id": 1,
-                    "date": f"{last_night.isoformat()}T19:00:00+00:00",
+                    "date": f"{day.isoformat()}T19:00:00+00:00",
                     "status": {"short": status},
                 },
                 "teams": {
@@ -110,7 +115,7 @@ class TestApiFootballQuotaAndCache:
 
 
 class TestSeasonProvider:
-    """The freshness ladder, driven with stub sources."""
+    """The fixture-aware freshness ladder, driven with stub sources."""
 
     def _csv_stub(self, matches, error: Exception | None = None):
         class Stub:
@@ -131,7 +136,7 @@ class TestSeasonProvider:
             client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
         )
 
-    def _played(self, date, home="Man United"):
+    def _played(self, date, home="Man United", away="Chelsea"):
         from football_mcp.models import Match
 
         return Match(
@@ -139,51 +144,85 @@ class TestSeasonProvider:
             season="2026-27",
             date=date,
             home_team=home,
-            away_team="Chelsea",
+            away_team=away,
             home_goals=1,
             away_goals=0,
             result="H",
+        )
+
+    def _fixture(self, date, home="Man United", away="Brighton", kick_off=None):
+        from football_mcp.models import Match
+
+        return Match(
+            competition="E0",
+            season="2026-27",
+            date=date,
+            kick_off=kick_off,
+            home_team=home,
+            away_team=away,
         )
 
     async def test_fresh_csv_skips_api(self, tmp_path):
-        from football_mcp.models import Match
-
         today = dt.date.today()
-        fresh = Match(
-            competition="E0",
-            season="2026-27",
-            date=today,
-            home_team="Man United",
-            away_team="Chelsea",
-            home_goals=1,
-            away_goals=0,
-            result="H",
-        )
-        provider = SeasonProvider(self._csv_stub([fresh]), self._api(tmp_path, _payload()))
+        base = [self._played(today)]
+        provider = SeasonProvider(self._csv_stub(base), self._api(tmp_path, _payload()))
         result = await provider.get_season("E0", "2026-27")
         assert result.freshness.api_used is False
         assert result.freshness.warning is None
         assert result.freshness.quota_remaining is None
 
-    async def test_stale_csv_with_key_fills_gap(self, tmp_path):
-        stale_date = dt.date.today() - dt.timedelta(days=3)
+    async def test_break_weeks_waste_no_quota(self, tmp_path):
+        """No matches during a break -> nothing overdue -> zero API calls."""
+        base = [
+            self._played(dt.date.today() - dt.timedelta(days=5)),
+            self._fixture(dt.date.today() + dt.timedelta(days=3)),
+        ]
+        provider = SeasonProvider(self._csv_stub(base), self._api(tmp_path, _payload()))
+        result = await provider.get_season("E0", "2026-27")
+        assert result.freshness.api_used is False
+        assert result.freshness.warning is None
+
+    async def test_just_finished_match_detected_same_evening(self, tmp_path):
+        """Kickoff + 2h with no result -> refresh immediately, same day."""
+        kickoff = (dt.datetime.now(tz=dt.UTC) - dt.timedelta(hours=3)).strftime("%H:%M")
+        base = [
+            self._played(dt.date.today() - dt.timedelta(days=5)),
+            self._fixture(dt.date.today(), kick_off=kickoff),
+        ]
         provider = SeasonProvider(
-            self._csv_stub([self._played(stale_date)]), self._api(tmp_path, _payload())
+            self._csv_stub(base), self._api(tmp_path, _payload(date=dt.date.today()))
         )
         result = await provider.get_season("E0", "2026-27")
         assert result.freshness.api_used is True
+        # The overdue CSV row must be superseded by the API result row.
+        today_rows = [m for m in result.matches if m.date == dt.date.today()]
+        assert len(today_rows) == 1
+        assert today_rows[0].played is True
+        assert result.freshness.warning is None
+
+    async def test_stale_csv_with_key_fills_gap(self, tmp_path):
+        base = [
+            self._played(dt.date.today() - dt.timedelta(days=3)),
+            self._fixture(dt.date.today() - dt.timedelta(days=1)),
+        ]
+        provider = SeasonProvider(self._csv_stub(base), self._api(tmp_path, _payload()))
+        result = await provider.get_season("E0", "2026-27")
+        assert result.freshness.api_used is True
         assert result.freshness.quota_remaining is not None
-        # Two matches: stale CSV one + fresh API one (deduped by names).
+        # Old played row + overdue row replaced by the fresh API result.
         assert len(result.matches) == 2
         assert result.freshness.warning is None
 
     async def test_stale_csv_without_key_warns(self):
-        stale_date = dt.date.today() - dt.timedelta(days=3)
-        provider = SeasonProvider(self._csv_stub([self._played(stale_date)]), None)
+        base = [
+            self._played(dt.date.today() - dt.timedelta(days=3)),
+            self._fixture(dt.date.today() - dt.timedelta(days=1)),
+        ]
+        provider = SeasonProvider(self._csv_stub(base), None)
         result = await provider.get_season("E0", "2026-27")
         assert result.freshness.api_used is False
         assert result.freshness.warning is not None
-        assert "stale" in result.freshness.warning
+        assert "FOOTBALL_MCP_API_FOOTBALL_KEY" in result.freshness.warning
 
     async def test_unpublished_season_served_purely_from_api(self, tmp_path):
         provider = SeasonProvider(
