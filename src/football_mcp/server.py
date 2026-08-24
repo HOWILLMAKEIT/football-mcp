@@ -27,7 +27,7 @@ from football_mcp.derive import (
 )
 from football_mcp.models import Match
 from football_mcp.names import canonical
-from football_mcp.sources.espn import EspnSource
+from football_mcp.sources.espn import CUP_SLUGS, EspnSource
 from football_mcp.sources.football_data import (
     SUPPORTED_COMPETITIONS,
     DataSourceError,
@@ -141,6 +141,8 @@ def _match_view(
         )
     if match.referee:
         view["referee"] = match.referee
+    if match.note:
+        view["note"] = match.note  # cup semantics: legs, penalty shootouts
     if include_odds:
         odds = _odds_view(match, odds_detail)
         if odds is not None:
@@ -362,6 +364,93 @@ async def get_head_to_head(
         "summary": totals,
         "skipped_seasons": skipped,
         "freshness": last_freshness,
+    }
+
+
+@mcp.tool()
+def list_cup_competitions() -> dict[str, str]:
+    """List supported cup competitions as {code: name}.
+
+    Cups are served purely from ESPN (no odds, no football-data CSV base).
+    Codes: FA Cup, LC League Cup, CDR Copa del Rey, CI Coppa Italia,
+    DFB Pokal, CDF Coupe de France, UCL Champions League, UEL Europa League.
+    """
+    return {code: name for code, (_slug, name) in CUP_SLUGS.items()}
+
+
+@mcp.tool()
+async def get_cup_matches(
+    competition: str,
+    season: str,
+    team: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    only: str = "all",
+    limit: int = DEFAULT_ROWS,
+) -> dict[str, Any]:
+    """Query matches in a cup competition for one season (ESPN source).
+
+    Includes ties decided on penalties: the recorded score is the
+    regulation/extra-time score and `note` carries e.g. "advance 4-3 on
+    penalties" or "1st Leg" for two-legged ties. No odds and no shot stats
+    for most cup matches; ESPN history reaches back to the early 2000s.
+
+    Args:
+        competition: cup code (see list_cup_competitions), e.g. "FA", "UCL".
+        season: season label covering the whole campaign, e.g. "2025-26"
+            (an Aug..Jul span; the 2025-26 FA Cup final is May 2026).
+        team: optional team filter; loose matching.
+        date_from / date_to: optional inclusive "YYYY-MM-DD" bounds.
+        only: "all" (default), "played", or "upcoming".
+        limit: max matches returned, 1-100 (default 50), newest first.
+    """
+    if only not in ("all", "played", "upcoming"):
+        raise ValueError(f"only must be all|played|upcoming, got {only!r}")
+    limit = max(1, min(int(limit), MAX_ROWS))
+    lo = _parse_date(date_from, "date_from")
+    hi = _parse_date(date_to, "date_to")
+
+    espn = get_provider().enhancement
+    if not isinstance(espn, EspnSource):
+        raise ValueError("cup support requires the espn source")
+    try:
+        matches = await espn.get_cup_season(competition, season)
+    except DataSourceError as exc:
+        raise ValueError(str(exc)) from exc
+
+    team_key = canonical(team) if team else None
+    rows: list[Match] = []
+    for match in matches:
+        if match.date is None:
+            continue
+        if lo is not None and match.date < lo:
+            continue
+        if hi is not None and match.date > hi:
+            continue
+        if team_key is not None and team_key not in (
+            canonical(match.home_team),
+            canonical(match.away_team),
+        ):
+            continue
+        if only == "played" and not match.played:
+            continue
+        if only == "upcoming" and match.played:
+            continue
+        rows.append(match)
+
+    rows.sort(key=lambda m: m.date or dt.date.min, reverse=True)
+    total = len(rows)
+    selected = rows[:limit]
+    played_dates = [m.date for m in matches if m.played and m.date]
+    return {
+        "matches": [
+            _match_view(m, include_stats=False, include_odds=False, odds_detail=False)
+            for m in selected
+        ],
+        "count": len(selected),
+        "total_matching": total,
+        "source": "espn",
+        "latest_played": max(played_dates).isoformat() if played_dates else None,
     }
 
 

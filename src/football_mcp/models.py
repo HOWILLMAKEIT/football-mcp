@@ -36,6 +36,7 @@ class Match(BaseModel):
     home_goals: int | None = None
     away_goals: int | None = None
     result: Literal["H", "D", "A"] | None = None
+    note: str | None = None  # cup semantics: round leg, penalty shootouts, etc.
     half_time_home_goals: int | None = None
     half_time_away_goals: int | None = None
     referee: str | None = None

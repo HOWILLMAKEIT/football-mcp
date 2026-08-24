@@ -50,6 +50,21 @@ SLUGS: dict[str, str] = {
     "G1": "gre.1",
 }
 
+# Cup competitions (verified 2026-08-25). Cups have no football-data CSV
+# base: ESPN is the sole source. ESPN caps one scoreboard request at 100
+# events, so a season is fetched in two half-windows.
+CUP_SLUGS: dict[str, tuple[str, str]] = {
+    # code -> (espn slug, human name)
+    "FA": ("eng.fa", "England FA Cup"),
+    "LC": ("eng.league_cup", "England League Cup (Carabao)"),
+    "CDR": ("esp.copa_del_rey", "Spain Copa del Rey"),
+    "CI": ("ita.coppa_italia", "Italy Coppa Italia"),
+    "DFB": ("ger.dfb_pokal", "Germany DFB Pokal"),
+    "CDF": ("fra.coupe_de_france", "France Coupe de France"),
+    "UCL": ("uefa.champions", "UEFA Champions League"),
+    "UEL": ("uefa.europa", "UEFA Europa League"),
+}
+
 
 def _result_letter(home: int, away: int) -> str:
     if home > away:
@@ -129,6 +144,11 @@ def parse_scoreboard(payload: dict[str, Any], competition: str, season: str) -> 
             "home_team": home_name,
             "away_team": away_name,
         }
+        notes = competitions[0].get("notes") or []
+        if notes and isinstance(notes[0], dict):
+            note_text = (notes[0].get("headline") or notes[0].get("text") or "").strip()
+            if note_text:
+                fields["note"] = note_text  # e.g. "1st Leg", "advance 4-3 on penalties"
         if completed:
             home_goals = _to_int(home.get("score"))
             away_goals = _to_int(away.get("score"))
@@ -221,3 +241,58 @@ class EspnSource:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(json.dumps(payload))
         return parse_scoreboard(payload, competition, season)
+
+    async def get_cup_season(self, competition: str, season: str) -> list[Match]:
+        """All events of a cup season, fetched in two half-windows.
+
+        ESPN caps one scoreboard request at 100 events; a full FA Cup season
+        (~123 ties) exceeds that, so the Aug..Jul season span is split in two
+        and the halves merged. Cups have no CSV base and no freshness ladder:
+        this is a direct ESPN read, minute-fresh by nature.
+        """
+        competition = competition.upper()
+        entry = CUP_SLUGS.get(competition)
+        if entry is None:
+            raise DataSourceError(
+                f"unknown cup code {competition!r}; call list_cup_competitions"
+            )
+        slug = entry[0]
+        try:
+            start_year = int(season[:4])
+        except (ValueError, TypeError) as exc:
+            raise DataSourceError(f"invalid season label: {season!r}") from exc
+        season_start = dt.date(start_year, 8, 1)
+        season_end = dt.date(start_year + 1, 7, 31)
+        mid = dt.date(start_year + 1, 1, 31)
+        matches: list[Match] = []
+        for window_from, window_to in (
+            (season_start, mid),
+            (mid + dt.timedelta(days=1), season_end),
+        ):
+            cache_path = self._cache_path(f"CUP-{competition}", window_from, window_to)
+            if cache_path.exists() and (
+                time.time() - cache_path.stat().st_mtime < self.ttl_seconds
+            ):
+                payload = json.loads(cache_path.read_text())
+            else:
+                response = await self._client_get().get(
+                    BASE_URL.format(slug=slug),
+                    params={"dates": f"{window_from:%Y%m%d}-{window_to:%Y%m%d}"},
+                )
+                if response.status_code == 404:
+                    raise DataSourceError(f"espn returned 404 for slug {slug!r}")
+                response.raise_for_status()
+                payload = response.json()
+                self.cache_dir.mkdir(parents=True, exist_ok=True)
+                cache_path.write_text(json.dumps(payload))
+            matches.extend(parse_scoreboard(payload, competition, season))
+        # dedupe defensively across the window boundary
+        seen: set[tuple] = set()
+        unique: list[Match] = []
+        for m in matches:
+            key = (m.date, m.home_team, m.away_team)
+            if key not in seen:
+                seen.add(key)
+                unique.append(m)
+        unique.sort(key=lambda m: (m.date is None, m.date or dt.date.min))
+        return unique
