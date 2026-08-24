@@ -7,6 +7,16 @@ Design:
   is revalidated after a TTL via conditional GET (If-Modified-Since), so last
   night's matches show up without re-downloading on every call.
 - Old seasons have fewer columns; every mapped column is optional at parse time.
+
+football-data.co.uk 赛季 CSV 数据源。
+
+设计：
+- 方案 A 解析：使用一个集中的列映射表，忽略表中未定义的内容。以后新增字段时，
+  只需修改这一处。
+- 数据新鲜度：历史赛季视为不可变并永久缓存；当前赛季在 TTL 到期后通过条件
+  GET（If-Modified-Since）重新验证，因此昨晚的比赛可以及时出现，同时避免每次
+  调用都重新下载。
+- 较早赛季包含的列更少，因此解析时所有映射列均按可选字段处理。
 """
 
 from __future__ import annotations

@@ -1,4 +1,7 @@
-"""Domain models shared across football_mcp sources and tools."""
+"""Domain models shared across football_mcp sources and tools.
+
+football_mcp 数据源与工具共享的领域模型。
+"""
 
 from __future__ import annotations
 
