@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from football_mcp.sources.api_football import ApiFootballSource, parse_fixtures
+from football_mcp.sources.espn import EspnSource, parse_scoreboard
 from football_mcp.sources.football_data import DataSourceError
 from football_mcp.sources.season_provider import SeasonProvider
 
@@ -167,7 +168,7 @@ class TestSeasonProvider:
         base = [self._played(today)]
         provider = SeasonProvider(self._csv_stub(base), self._api(tmp_path, _payload()))
         result = await provider.get_season("E0", "2026-27")
-        assert result.freshness.api_used is False
+        assert result.freshness.enhancement_used is False
         assert result.freshness.warning is None
         assert result.freshness.quota_remaining is None
 
@@ -179,7 +180,7 @@ class TestSeasonProvider:
         ]
         provider = SeasonProvider(self._csv_stub(base), self._api(tmp_path, _payload()))
         result = await provider.get_season("E0", "2026-27")
-        assert result.freshness.api_used is False
+        assert result.freshness.enhancement_used is False
         assert result.freshness.warning is None
 
     async def test_just_finished_match_detected_same_evening(self, tmp_path):
@@ -193,7 +194,7 @@ class TestSeasonProvider:
             self._csv_stub(base), self._api(tmp_path, _payload(date=dt.date.today()))
         )
         result = await provider.get_season("E0", "2026-27")
-        assert result.freshness.api_used is True
+        assert result.freshness.enhancement_used is True
         # The overdue CSV row must be superseded by the API result row.
         today_rows = [m for m in result.matches if m.date == dt.date.today()]
         assert len(today_rows) == 1
@@ -207,7 +208,7 @@ class TestSeasonProvider:
         ]
         provider = SeasonProvider(self._csv_stub(base), self._api(tmp_path, _payload()))
         result = await provider.get_season("E0", "2026-27")
-        assert result.freshness.api_used is True
+        assert result.freshness.enhancement_used is True
         assert result.freshness.quota_remaining is not None
         # Old played row + overdue row replaced by the fresh API result.
         assert len(result.matches) == 2
@@ -220,9 +221,9 @@ class TestSeasonProvider:
         ]
         provider = SeasonProvider(self._csv_stub(base), None)
         result = await provider.get_season("E0", "2026-27")
-        assert result.freshness.api_used is False
+        assert result.freshness.enhancement_used is False
         assert result.freshness.warning is not None
-        assert "FOOTBALL_MCP_API_FOOTBALL_KEY" in result.freshness.warning
+        assert "enhancement source" in result.freshness.warning
 
     async def test_unpublished_season_served_purely_from_api(self, tmp_path):
         provider = SeasonProvider(
@@ -230,6 +231,119 @@ class TestSeasonProvider:
             self._api(tmp_path, _payload()),
         )
         result = await provider.get_season("E0", "2026-27")
-        assert result.freshness.api_used is True
+        assert result.freshness.enhancement_used is True
         assert len(result.matches) == 1
         assert result.matches[0].home_team == "Manchester United"
+
+
+def _espn_event(
+    date_iso: str,
+    state: str,
+    completed: bool,
+    home: str,
+    away: str,
+    home_score: str,
+    away_score: str,
+) -> dict:
+    return {
+        "id": "1",
+        "date": date_iso,
+        "name": f"{home} vs {away}",
+        "status": {"type": {"state": state, "completed": completed, "detail": "FT"}},
+        "competitions": [
+            {
+                "competitors": [
+                    {
+                        "homeAway": "home",
+                        "team": {"displayName": home},
+                        "score": home_score,
+                    },
+                    {
+                        "homeAway": "away",
+                        "team": {"displayName": away},
+                        "score": away_score,
+                    },
+                ]
+            }
+        ],
+    }
+
+
+class TestEspnSource:
+    """Parsing and caching for the keyless ESPN scoreboard source."""
+
+    def _payload(self) -> dict:
+        yesterday = dt.date.today() - dt.timedelta(days=1)
+        tomorrow = dt.date.today() + dt.timedelta(days=1)
+        return {
+            "events": [
+                _espn_event(
+                    f"{yesterday}T19:00Z", "post", True,
+                    "Arsenal", "Coventry City", "3", "0",
+                ),
+                # Real-data trap: pre matches already carry score "0".
+                _espn_event(
+                    f"{tomorrow}T19:00Z", "pre", False,
+                    "Fulham", "Chelsea", "0", "0",
+                ),
+            ]
+        }
+
+    def test_parse_finished_and_pre(self):
+        matches = parse_scoreboard(self._payload(), "E0", "2026-27")
+        assert len(matches) == 2
+        played, pre = matches
+        assert played.played is True
+        assert played.home_goals == 3
+        assert played.result == "H"
+        assert played.kick_off == "19:00"
+        assert pre.played is False
+        assert pre.home_goals is None  # the "0" score must NOT become a draw
+        assert pre.home_team == "Fulham"
+
+    async def test_get_fixtures_parses_and_caches(self, tmp_path):
+        calls: list[int] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(1)
+            return httpx.Response(200, json=self._payload())
+
+        src = EspnSource(
+            cache_dir=tmp_path,
+            client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        )
+        assert src.has_key is True
+        assert src.quota_remaining() is None
+        d1, d2 = dt.date(2026, 8, 21), dt.date(2026, 8, 24)
+        matches = await src.get_fixtures("E0", "2026-27", d1, d2)
+        assert len(matches) == 2
+        await src.get_fixtures("E0", "2026-27", d1, d2)  # cached
+        assert len(calls) == 1
+
+    async def test_unknown_slug_raises(self, tmp_path):
+        src = EspnSource(cache_dir=tmp_path)
+        with pytest.raises(DataSourceError, match="slug"):
+            await src.get_fixtures("XX", "2026-27", dt.date(2026, 8, 1), dt.date(2026, 8, 2))
+
+    async def test_provider_with_espn_serves_unpublished_season(self, tmp_path):
+        """The exact production situation of E0 2026-27 today: no CSV at all."""
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=self._payload())
+
+        class CsvUnavailable:
+            async def get_season(self, competition, season):
+                raise DataSourceError("season not published")
+
+        provider = SeasonProvider(
+            CsvUnavailable(),
+            EspnSource(
+                cache_dir=tmp_path,
+                client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+            ),
+        )
+        result = await provider.get_season("E0", "2026-27")
+        assert result.freshness.enhancement_used is True
+        assert result.freshness.enhancement_name == "espn"
+        assert result.freshness.quota_remaining is None
+        assert result.freshness.warning is None
+        assert len(result.matches) == 2  # yesterday's result + tomorrow's fixture

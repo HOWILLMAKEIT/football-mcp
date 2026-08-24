@@ -16,6 +16,7 @@ def _normalize(name: str) -> str:
     text = unicodedata.normalize("NFKD", name)
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
     text = text.casefold().replace(".", " ").replace("-", " ").replace("'", "")
+    text = text.replace("&", " and ")
     return re.sub(r"\s+", " ", text).strip()
 
 
@@ -51,6 +52,7 @@ _ALIASES: dict[str, str] = {
     "birmingham": "birmingham city",
     "wigan": "wigan athletic",
     "bristol city": "bristol city",
+    "hull": "hull city",
     "hull city": "hull city",
     "coventry": "coventry city",
     "qpr": "queens park rangers",

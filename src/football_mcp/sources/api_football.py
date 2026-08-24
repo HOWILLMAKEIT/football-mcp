@@ -122,6 +122,8 @@ def parse_fixtures(payload: dict[str, Any], competition: str, season: str) -> li
 class ApiFootballSource:
     """Fresh fixtures from api-football.api-sports.io with quota + cache."""
 
+    name = "api-football"
+
     def __init__(
         self,
         api_key: str | None = None,
@@ -172,6 +174,9 @@ class ApiFootballSource:
         if state.get("date") != dt.date.today().isoformat():
             return 0
         return int(state.get("count", 0))
+
+    def quota_remaining(self) -> int | None:
+        return self.quota_limit - self.quota_count()
 
     def _bump_quota(self) -> None:
         self.cache_dir.mkdir(parents=True, exist_ok=True)

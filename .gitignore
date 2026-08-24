@@ -19,3 +19,5 @@ dist/
 # local dev downloads
 cache-dev/
 .cache-dev/
+
+/docs

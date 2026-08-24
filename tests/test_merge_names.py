@@ -22,6 +22,13 @@ class TestNames:
         assert same_team("Betis", "Real Betis")
         assert same_team("Köln", "FC Koln")
 
+    def test_espn_full_names_align_with_csv_short_names(self):
+        assert same_team("Brighton & Hove Albion", "Brighton")  # & folding
+        assert same_team("Hull City", "Hull")
+        assert same_team("Nottingham Forest", "Nott'm Forest")
+        assert same_team("AFC Bournemouth", "Bournemouth")
+        assert same_team("Manchester United", "Man United")
+
     def test_unknown_names_passthrough(self):
         assert canonical("Some New FC") == "some new fc"
 
