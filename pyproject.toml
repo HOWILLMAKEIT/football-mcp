@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
-  "mcp>=1.0,<2",
+  "mcp>=2.0,<3",
   "httpx>=0.27,<1",
   "pydantic>=2.10,<3",
   "pydantic-settings>=2.7,<3",
@@ -22,6 +22,9 @@ dev = [
   "pytest-asyncio>=0.24,<2",
   "ruff>=0.9,<1",
 ]
+
+[project.scripts]
+football-mcp = "football_mcp.server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/football_mcp"]
