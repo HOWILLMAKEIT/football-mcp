@@ -1,0 +1,34 @@
+{
+  "name": "dsh-football-mcp",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness plugin: football-mcp — a data-provider MCP server (results, stats, odds, standings, form, head-to-head for 18 European leagues + 8 cups) for any dsh agent.",
+  "license": "MIT",
+  "type": "module",
+  "files": [
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "mcp",
+    "football",
+    "soccer"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HOWILLMAKEIT/football-mcp.git",
+    "directory": "dsh-plugin"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

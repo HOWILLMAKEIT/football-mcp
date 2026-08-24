@@ -77,19 +77,23 @@ uv run football-mcp
 }
 ```
 
-### DeepSeek Harness (dsh) — `cordis.patch.yml`
+### DeepSeek Harness (dsh)
 
-```yaml
-- id: mcp-football
-  name: '@deepseek-ai/dsh-mcp-client'
-  config:
-    serverName: football
-    transport: stdio
-    command: uvx
-    args: ['football-mcp']
+```bash
+dsh plugin --profile web add dsh-football-mcp
 ```
 
 Tools surface as `mcp__football__get_matches`, … in every dsh session.
+Requires `uv` on `PATH` (the server runs as `uvx football-mcp`). To hack on
+a local checkout instead, override the entry in your profile's
+`cordis.patch.yml`:
+
+```yaml
+- id: mcp-football
+  config:
+    command: uv
+    args: ['--directory', '/path/to/football_mcp', 'run', 'football-mcp']
+```
 
 ## Configuration
 

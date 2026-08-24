@@ -1,0 +1,21 @@
+# dsh-football-mcp: expose the football-mcp MCP server to dsh agents.
+#
+# Tools surface as mcp__football__<raw> (list_competitions, get_matches,
+# get_standings, get_team_form, get_head_to_head, list_cup_competitions,
+# get_cup_matches, ...). The server is spawned via uvx from the published
+# PyPI wheel, so users need `uv` on PATH and nothing else — no clone, no
+# Python env management.
+#
+# Requires the football-mcp PyPI release (>= 0.1.0).
+- insert:
+    - id: mcp-football
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: football
+        transport: stdio
+        command: uvx
+        args: ['football-mcp']
+        # Override to run a local checkout instead, e.g. via your own
+        # cordis.patch.yml entry targeting id mcp-football:
+        #   command: uv
+        #   args: ['--directory', '/path/to/football_mcp', 'run', 'football-mcp']

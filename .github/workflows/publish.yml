@@ -43,3 +43,23 @@ jobs:
           path: dist/
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  publish-dsh-plugin:
+    # The dsh plugin references `uvx football-mcp`, so it must land after
+    # the PyPI wheel is live. Requires an NPM_TOKEN secret with publish
+    # rights for the HOWILLMAKEIT npm account.
+    needs: publish
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dsh-plugin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: https://registry.npmjs.org
+      - name: Publish dsh plugin to npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
