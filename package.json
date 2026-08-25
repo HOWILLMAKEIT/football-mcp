@@ -1,6 +1,6 @@
 {
   "name": "football-data-mcp",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Data-provider MCP server for football: results, stats, odds, standings, form and head-to-head for 18 European leagues (1993-94 →) and 8 cup competitions, for any MCP client. Also a DeepSeek Harness (dsh) plugin.",
   "license": "MIT",
   "type": "module",

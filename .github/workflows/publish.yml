@@ -25,7 +25,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write # npm provenance
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -37,6 +36,6 @@ jobs:
           pkg_version=$(node -p "require('./package.json').version")
           test "v${pkg_version}" = "${GITHUB_REF_NAME}"
       - name: Publish to npm
-        run: npm publish --access public --provenance
+        run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM }}
