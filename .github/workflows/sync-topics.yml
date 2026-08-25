@@ -1,0 +1,37 @@
+name: sync repository topics
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  administration: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync GitHub repository topics
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          gh api --method PUT "repos/${REPOSITORY}/topics" \
+            -H 'Accept: application/vnd.github+json' \
+            -f 'names[]=mcp' \
+            -f 'names[]=model-context-protocol' \
+            -f 'names[]=football' \
+            -f 'names[]=soccer' \
+            -f 'names[]=football-data' \
+            -f 'names[]=soccer-data' \
+            -f 'names[]=sports-data' \
+            -f 'names[]=ai-agent' \
+            -f 'names[]=ai-tools' \
+            -f 'names[]=python' \
+            -f 'names[]=npm' \
+            -f 'names[]=claude' \
+            -f 'names[]=codex' \
+            -f 'names[]=cursor' \
+            -f 'names[]=open-source'
