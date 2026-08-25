@@ -22,6 +22,9 @@ jobs:
             -H 'Accept: application/vnd.github+json' \
             -f 'names[]=mcp' \
             -f 'names[]=model-context-protocol' \
+            -f 'names[]=dsh-plugin' \
+            -f 'names[]=deepseek-harness' \
+            -f 'names[]=deepseek' \
             -f 'names[]=football' \
             -f 'names[]=soccer' \
             -f 'names[]=football-data' \
