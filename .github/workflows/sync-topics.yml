@@ -5,19 +5,19 @@ on:
     branches: [main]
   workflow_dispatch:
 
-permissions:
-  contents: read
-  administration: write
-
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
       - name: Sync GitHub repository topics
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GH_TOPICS_TOKEN }}
           REPOSITORY: ${{ github.repository }}
         run: |
+          test -n "$GH_TOKEN" || {
+            echo 'GH_TOPICS_TOKEN secret is required to update repository topics.' >&2
+            exit 1
+          }
           gh api --method PUT "repos/${REPOSITORY}/topics" \
             -H 'Accept: application/vnd.github+json' \
             -f 'names[]=mcp' \
