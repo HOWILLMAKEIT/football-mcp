@@ -1,0 +1,22 @@
+# football-data-mcp as a DeepSeek Harness bundle: connect the
+# football-data-mcp MCP server to dsh agents as mcp__football__<tool>.
+#
+# Spawn via the package's own npx bin: `npx -y football-data-mcp` runs
+# bin/cli.mjs, which locates the installed package, builds an ephemeral
+# tool env with `uvx --from <pkgdir>`, and execs the Python server over
+# stdio. Requires Node (for npx; dsh hosts have it) and `uv` on PATH.
+#
+# To run a local checkout instead, override this entry by id in your
+# profile's cordis.patch.yml:
+#   - id: mcp-football
+#     config:
+#       command: uv
+#       args: ['--directory', '/path/to/football-mcp', 'run', 'football-data-mcp']
+- insert:
+    - id: mcp-football
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: football
+        transport: stdio
+        command: npx
+        args: ['-y', 'football-data-mcp']

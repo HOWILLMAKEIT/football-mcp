@@ -1,65 +1,42 @@
-# Publish to PyPI on every tagged release (v*).
-#
-# Uses PyPI trusted publishing (OIDC): no API token in secrets.
-# One-time setup on pypi.org (per project):
-#   Publishing → Add a new pending publisher
-#     PyPI project name: football-mcp
-#     Owner: HOWILLMAKEIT
-#     Repository: HOWILLMAKEIT/football-mcp
-#     Workflow name: publish.yml
-#     Environment: pypi
-# And create the "pypi" GitHub environment (Settings → Environments).
-
 name: publish
+
+# npm-only release: one tag publishes the unified package `football-data-mcp`
+# (npx entry + dsh plugin + embedded Python server) to npm.
+# Requires an NPM_TOKEN secret with publish rights.
 
 on:
   push:
     tags: ["v*"]
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - name: Build sdist and wheel
-        run: uv build
-      - uses: actions/upload-artifact@v4
         with:
-          name: dist
-          path: dist/
+          python-version: "3.12"
+      - run: uv sync --extra dev
+      - run: uv run ruff check .
+      - run: uv run pytest
 
-  publish:
-    needs: build
+  publish-npm:
+    needs: test
     runs-on: ubuntu-latest
-    environment: pypi
     permissions:
-      # Required for OIDC trusted publishing.
-      id-token: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist/
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-
-  publish-dsh-plugin:
-    # The dsh plugin references `uvx football-mcp`, so it must land after
-    # the PyPI wheel is live. Requires an NPM_TOKEN secret with publish
-    # rights for the HOWILLMAKEIT npm account.
-    needs: publish
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: dsh-plugin
+      contents: read
+      id-token: write # npm provenance
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           registry-url: https://registry.npmjs.org
-      - name: Publish dsh plugin to npm
-        run: npm publish --access public
+      - name: Check tag matches package version
+        run: |
+          pkg_version=$(node -p "require('./package.json').version")
+          test "v${pkg_version}" = "${GITHUB_REF_NAME}"
+      - name: Publish to npm
+        run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

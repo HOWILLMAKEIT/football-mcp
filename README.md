@@ -1,11 +1,10 @@
-# football-mcp
+# football-data-mcp
 
 A data-provider MCP server for football: results, match stats, odds and
 derived analytics (standings, form, head-to-head) for 18 European leagues —
-seasons 1993-94 to today — served over stdio to any MCP client.
-
-No API keys required. No opinions baked in: it serves data and server-side
-aggregates; the intelligence lives in the calling agent.
+seasons 1993-94 to today — served over stdio to any MCP client. Ships as a
+single npm package (npx entry + DeepSeek Harness plugin + embedded Python
+server); the intelligence lives in the calling agent.
 
 ## Data sources
 
@@ -44,64 +43,51 @@ has none).
 
 ## Install
 
+Distributed on npm only (the Python server is embedded and run via
+[`uv`](https://docs.astral.sh/uv/), which must be on `PATH`). No API keys.
+
+### Claude Desktop / Cursor / any stdio MCP client
+
+```json
+{
+  "mcpServers": {
+    "football": {
+      "command": "npx",
+      "args": ["-y", "football-data-mcp"]
+    }
+  }
+}
+```
+
+### Codex
+
 ```bash
-# from PyPI (once published)
-uvx football-mcp            # runs the server over stdio
-# or from a local checkout
-uv run football-mcp
-```
-
-### Claude Desktop
-
-```json
-{
-  "mcpServers": {
-    "football": {
-      "command": "uvx",
-      "args": ["football-mcp"]
-    }
-  }
-}
-```
-
-### Cursor (`.cursor/mcp.json`)
-
-```json
-{
-  "mcpServers": {
-    "football": {
-      "command": "uvx",
-      "args": ["football-mcp"]
-    }
-  }
-}
+codex mcp add football -- npx -y football-data-mcp
 ```
 
 ### DeepSeek Harness (dsh)
 
 ```bash
-dsh plugin --profile web add dsh-football-mcp
+dsh plugin --profile web add football-data-mcp
 ```
 
 Tools surface as `mcp__football__get_matches`, … in every dsh session.
-Requires `uv` on `PATH` (the server runs as `uvx football-mcp`). To hack on
-a local checkout instead, override the entry in your profile's
-`cordis.patch.yml`:
 
-```yaml
-- id: mcp-football
-  config:
-    command: uv
-    args: ['--directory', '/path/to/football_mcp', 'run', 'football-mcp']
+### Run a local checkout instead
+
+```bash
+git clone https://github.com/HOWILLMAKEIT/football-mcp && cd football-mcp
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"probe","version":"0"}}}' \
+  | node bin/cli.mjs     # smoke: should answer with server capabilities
 ```
+
+Or point an MCP client at `uv --directory <repo> run football-data-mcp`.
 
 ## Configuration
 
 | Env var | Default | Purpose |
 |---|---|---|
 | `FOOTBALL_MCP_CACHE_DIR` | `~/.cache/football_mcp` | CSV/ESPN cache location |
-
-No API keys needed for any source.
 
 ## Example
 
@@ -119,7 +105,11 @@ Agent: get_head_to_head("Barcelona", "Real Madrid", "SP1", "2025-26",
 uv sync --extra dev
 uv run pytest      # 76 offline tests
 uv run ruff check .
+uv run football-data-mcp
 ```
+
+Release: bump `package.json` **and** `pyproject.toml` versions in lockstep,
+then `git tag v0.x.y && git push --tags` (CI tests, then publishes to npm).
 
 ## License
 

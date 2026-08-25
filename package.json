@@ -1,0 +1,41 @@
+{
+  "name": "football-data-mcp",
+  "version": "0.1.0",
+  "description": "Data-provider MCP server for football: results, stats, odds, standings, form and head-to-head for 18 European leagues (1993-94 →) and 8 cup competitions, for any MCP client. Also a DeepSeek Harness (dsh) plugin.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "football-data-mcp": "./bin/cli.mjs"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "pyproject.toml",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "dsh-plugin",
+    "deepseek-harness",
+    "football",
+    "soccer"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HOWILLMAKEIT/football-mcp.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

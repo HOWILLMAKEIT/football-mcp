@@ -3,7 +3,7 @@ requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
-name = "football-mcp"
+name = "football-data-mcp"
 version = "0.1.0"
 description = "Data-provider MCP server: football results, stats, odds and derived analytics (standings/form/H2H) for any agent"
 readme = "README.md"
@@ -32,6 +32,9 @@ dependencies = [
 Homepage = "https://github.com/HOWILLMAKEIT/football-mcp"
 Repository = "https://github.com/HOWILLMAKEIT/football-mcp"
 Issues = "https://github.com/HOWILLMAKEIT/football-mcp/issues"
+# Distribution note: this Python project ships inside the npm package
+# `football-data-mcp` (bin shim runs it via `uvx --from <pkg>`); it is not
+# published to PyPI.
 
 [project.optional-dependencies]
 dev = [
@@ -41,7 +44,7 @@ dev = [
 ]
 
 [project.scripts]
-football-mcp = "football_mcp.server:main"
+football-data-mcp = "football_mcp.server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/football_mcp"]

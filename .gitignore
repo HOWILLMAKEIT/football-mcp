@@ -21,3 +21,6 @@ cache-dev/
 .cache-dev/
 
 /docs
+
+# node
+node_modules/
